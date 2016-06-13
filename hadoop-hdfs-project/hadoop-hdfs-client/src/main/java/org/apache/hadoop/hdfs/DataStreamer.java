@@ -32,13 +32,17 @@ import java.net.Socket;
 import java.nio.channels.ClosedChannelException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.fs.StorageType;
 import org.apache.hadoop.hdfs.client.HdfsClientConfigKeys.BlockWrite;
@@ -130,6 +134,7 @@ class DataStreamer extends Daemon {
     final int timeout = client.getDatanodeReadTimeout(length);
     NetUtils.connect(sock, isa, client.getRandomLocalInterfaceAddr(),
         conf.getSocketTimeout());
+    sock.setTcpNoDelay(conf.getDataTransferTcpNoDelay());
     sock.setSoTimeout(timeout);
     sock.setKeepAlive(true);
     if (conf.getSocketSendBufferSize() > 0) {
@@ -368,9 +373,8 @@ class DataStreamer extends Daemon {
 
   /** Nodes have been used in the pipeline before and have failed. */
   private final List<DatanodeInfo> failed = new ArrayList<>();
-  /** The last ack sequence number before pipeline failure. */
-  private long lastAckedSeqnoBeforeFailure = -1;
-  private int pipelineRecoveryCount = 0;
+  /** The times have retried to recover pipeline, for the same packet. */
+  private volatile int pipelineRecoveryCount = 0;
   /** Has the current block been hflushed? */
   private boolean isHflushed = false;
   /** Append on an existing block? */
@@ -393,6 +397,7 @@ class DataStreamer extends Daemon {
   private volatile boolean appendChunk = false;
   // both dataQueue and ackQueue are protected by dataQueue lock
   protected final LinkedList<DFSPacket> dataQueue = new LinkedList<>();
+  private final Map<Long, Long> packetSendTime = new HashMap<>();
   private final LinkedList<DFSPacket> ackQueue = new LinkedList<>();
   private final AtomicReference<CachingStrategy> cachingStrategy;
   private final ByteArrayManager byteArrayManager;
@@ -411,13 +416,15 @@ class DataStreamer extends Daemon {
 
   protected final LoadingCache<DatanodeInfo, DatanodeInfo> excludedNodes;
   private final String[] favoredNodes;
+  private final EnumSet<AddBlockFlag> addBlockFlags;
 
   private DataStreamer(HdfsFileStatus stat, ExtendedBlock block,
                        DFSClient dfsClient, String src,
                        Progressable progress, DataChecksum checksum,
                        AtomicReference<CachingStrategy> cachingStrategy,
                        ByteArrayManager byteArrayManage,
-                       boolean isAppend, String[] favoredNodes) {
+                       boolean isAppend, String[] favoredNodes,
+                       EnumSet<AddBlockFlag> flags) {
     this.block = block;
     this.dfsClient = dfsClient;
     this.src = src;
@@ -429,11 +436,11 @@ class DataStreamer extends Daemon {
     this.isLazyPersistFile = isLazyPersist(stat);
     this.isAppend = isAppend;
     this.favoredNodes = favoredNodes;
-
     final DfsClientConf conf = dfsClient.getConf();
     this.dfsclientSlowLogThresholdMs = conf.getSlowIoWarningThresholdMs();
     this.excludedNodes = initExcludedNodes(conf.getExcludedNodesCacheExpiry());
     this.errorState = new ErrorState(conf.getDatanodeRestartTimeout());
+    this.addBlockFlags = flags;
   }
 
   /**
@@ -442,9 +449,10 @@ class DataStreamer extends Daemon {
   DataStreamer(HdfsFileStatus stat, ExtendedBlock block, DFSClient dfsClient,
                String src, Progressable progress, DataChecksum checksum,
                AtomicReference<CachingStrategy> cachingStrategy,
-               ByteArrayManager byteArrayManage, String[] favoredNodes) {
+               ByteArrayManager byteArrayManage, String[] favoredNodes,
+               EnumSet<AddBlockFlag> flags) {
     this(stat, block, dfsClient, src, progress, checksum, cachingStrategy,
-        byteArrayManage, false, favoredNodes);
+        byteArrayManage, false, favoredNodes, flags);
     stage = BlockConstructionStage.PIPELINE_SETUP_CREATE;
   }
 
@@ -458,7 +466,7 @@ class DataStreamer extends Daemon {
                AtomicReference<CachingStrategy> cachingStrategy,
                ByteArrayManager byteArrayManage) {
     this(stat, lastBlock.getBlock(), dfsClient, src, progress, checksum, cachingStrategy,
-        byteArrayManage, true, null);
+        byteArrayManage, true, null, null);
     stage = BlockConstructionStage.PIPELINE_SETUP_APPEND;
     bytesSent = block.getNumBytes();
     accessToken = lastBlock.getBlockToken();
@@ -475,8 +483,7 @@ class DataStreamer extends Daemon {
     setPipeline(lastBlock);
     if (nodes.length < 1) {
       throw new IOException("Unable to retrieve blocks locations " +
-          " for last block " + block +
-          "of file " + src);
+          " for last block " + block + " of file " + src);
     }
   }
 
@@ -507,7 +514,7 @@ class DataStreamer extends Daemon {
   }
 
   protected void endBlock() {
-    LOG.debug("Closing old block " + block);
+    LOG.debug("Closing old block {}", block);
     this.setName("DataStreamer for file " + src);
     closeResponder();
     closeStream();
@@ -591,7 +598,7 @@ class DataStreamer extends Daemon {
           LOG.debug("stage=" + stage + ", " + this);
         }
         if (stage == BlockConstructionStage.PIPELINE_SETUP_CREATE) {
-          LOG.debug("Allocating new block: " + this);
+          LOG.debug("Allocating new block: {}", this);
           setPipeline(nextBlockOutputStream());
           initDataStreaming();
         } else if (stage == BlockConstructionStage.PIPELINE_SETUP_APPEND) {
@@ -640,11 +647,12 @@ class DataStreamer extends Daemon {
             scope = null;
             dataQueue.removeFirst();
             ackQueue.addLast(one);
+            packetSendTime.put(one.getSeqno(), Time.monotonicNow());
             dataQueue.notifyAll();
           }
         }
 
-        LOG.debug(this + " sending " + one);
+        LOG.debug("{} sending {}", this, one);
 
         // write out data to remote datanode
         try (TraceScope ignored = dfsClient.getTracer().
@@ -953,15 +961,21 @@ class DataStreamer extends Daemon {
         // process responses from datanodes.
         try {
           // read an ack from the pipeline
-          long begin = Time.monotonicNow();
           ack.readFields(blockReplyStream);
-          long duration = Time.monotonicNow() - begin;
-          if (duration > dfsclientSlowLogThresholdMs
-              && ack.getSeqno() != DFSPacket.HEART_BEAT_SEQNO) {
-            LOG.warn("Slow ReadProcessor read fields took " + duration
-                + "ms (threshold=" + dfsclientSlowLogThresholdMs + "ms); ack: "
-                + ack + ", targets: " + Arrays.asList(targets));
-          } else {
+          if (ack.getSeqno() != DFSPacket.HEART_BEAT_SEQNO) {
+            Long begin = packetSendTime.get(ack.getSeqno());
+            if (begin != null) {
+              long duration = Time.monotonicNow() - begin;
+              if (duration > dfsclientSlowLogThresholdMs) {
+                LOG.info("Slow ReadProcessor read fields for block " + block
+                    + " took " + duration + "ms (threshold="
+                    + dfsclientSlowLogThresholdMs + "ms); ack: " + ack
+                    + ", targets: " + Arrays.asList(targets));
+              }
+            }
+          }
+
+          if (LOG.isDebugEnabled()) {
             LOG.debug("DFSClient {}", ack);
           }
 
@@ -1041,7 +1055,9 @@ class DataStreamer extends Daemon {
               one.setTraceScope(null);
             }
             lastAckedSeqno = seqno;
+            pipelineRecoveryCount = 0;
             ackQueue.removeFirst();
+            packetSendTime.remove(seqno);
             dataQueue.notifyAll();
 
             one.releaseBuffer(byteArrayManager);
@@ -1100,24 +1116,19 @@ class DataStreamer extends Daemon {
     synchronized (dataQueue) {
       dataQueue.addAll(0, ackQueue);
       ackQueue.clear();
+      packetSendTime.clear();
     }
 
-    // Record the new pipeline failure recovery.
-    if (lastAckedSeqnoBeforeFailure != lastAckedSeqno) {
-      lastAckedSeqnoBeforeFailure = lastAckedSeqno;
-      pipelineRecoveryCount = 1;
-    } else {
-      // If we had to recover the pipeline five times in a row for the
-      // same packet, this client likely has corrupt data or corrupting
-      // during transmission.
-      if (++pipelineRecoveryCount > 5) {
-        LOG.warn("Error recovering pipeline for writing " +
-            block + ". Already retried 5 times for the same packet.");
-        lastException.set(new IOException("Failing write. Tried pipeline " +
-            "recovery 5 times without success."));
-        streamerClosed = true;
-        return false;
-      }
+    // If we had to recover the pipeline five times in a row for the
+    // same packet, this client likely has corrupt data or corrupting
+    // during transmission.
+    if (!errorState.isRestartingNode() && ++pipelineRecoveryCount > 5) {
+      LOG.warn("Error recovering pipeline for writing " +
+          block + ". Already retried 5 times for the same packet.");
+      lastException.set(new IOException("Failing write. Tried pipeline " +
+          "recovery 5 times without success."));
+      streamerClosed = true;
+      return false;
     }
 
     setupPipelineForAppendOrRecovery();
@@ -1145,6 +1156,7 @@ class DataStreamer extends Daemon {
           assert endOfBlockPacket.isLastPacketInBlock();
           assert lastAckedSeqno == endOfBlockPacket.getSeqno() - 1;
           lastAckedSeqno = endOfBlockPacket.getSeqno();
+          pipelineRecoveryCount = 0;
           dataQueue.notifyAll();
         }
         endBlock();
@@ -1506,12 +1518,12 @@ class DataStreamer extends Daemon {
       success = createBlockOutputStream(nodes, storageTypes, 0L, false);
 
       if (!success) {
-        LOG.info("Abandoning " + block);
+        LOG.warn("Abandoning " + block);
         dfsClient.namenode.abandonBlock(block, stat.getFileId(), src,
             dfsClient.clientName);
         block = null;
         final DatanodeInfo badNode = nodes[errorState.getBadNodeIndex()];
-        LOG.info("Excluding datanode " + badNode);
+        LOG.warn("Excluding datanode " + badNode);
         excludedNodes.put(badNode, badNode);
       }
     } while (!success && --count >= 0);
@@ -1683,7 +1695,7 @@ class DataStreamer extends Daemon {
   private LocatedBlock locateFollowingBlock(DatanodeInfo[] excludedNodes)
       throws IOException {
     return DFSOutputStream.addBlock(excludedNodes, dfsClient, src, block,
-        stat.getFileId(), favoredNodes);
+        stat.getFileId(), favoredNodes, addBlockFlags);
   }
 
   /**
@@ -1770,7 +1782,7 @@ class DataStreamer extends Daemon {
       packet.addTraceParent(Tracer.getCurrentSpanId());
       dataQueue.addLast(packet);
       lastQueuedSeqno = packet.getSeqno();
-      LOG.debug("Queued " + packet + ", " + this);
+      LOG.debug("Queued {}, {}", packet, this);
       dataQueue.notifyAll();
     }
   }
@@ -1913,6 +1925,14 @@ class DataStreamer extends Daemon {
    */
   boolean streamerClosed(){
     return streamerClosed;
+  }
+
+  /**
+   * @return The times have retried to recover pipeline, for the same packet.
+   */
+  @VisibleForTesting
+  int getPipelineRecoveryCount() {
+    return pipelineRecoveryCount;
   }
 
   void closeSocket() throws IOException {

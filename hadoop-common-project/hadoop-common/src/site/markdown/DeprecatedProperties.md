@@ -45,12 +45,14 @@ The following table lists the configuration property names that are deprecated i
 | dfs.replication.considerLoad | dfs.namenode.replication.considerLoad |
 | dfs.replication.interval | dfs.namenode.replication.interval |
 | dfs.replication.min | dfs.namenode.replication.min |
-| dfs.replication.pending.timeout.sec | dfs.namenode.replication.pending.timeout-sec |
+| dfs.replication.pending.timeout.sec | dfs.namenode.reconstruction.pending.timeout-sec |
+| dfs.namenode.replication.pending.timeout-sec | dfs.namenode.reconstruction.pending.timeout-sec |
 | dfs.safemode.extension | dfs.namenode.safemode.extension |
 | dfs.safemode.threshold.pct | dfs.namenode.safemode.threshold-pct |
 | dfs.secondary.http.address | dfs.namenode.secondary.http-address |
 | dfs.socket.timeout | dfs.client.socket-timeout |
 | dfs.umaskmode | fs.permissions.umask-mode |
+| dfs.web.ugi | hadoop.http.staticuser.user |
 | dfs.write.packet.size | dfs.client-write-packet-size |
 | fs.checkpoint.dir | dfs.namenode.checkpoint.dir |
 | fs.checkpoint.edits.dir | dfs.namenode.checkpoint.edits.dir |

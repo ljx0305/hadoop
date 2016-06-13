@@ -40,6 +40,7 @@ import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.yarn.api.records.QueueACL;
 import org.apache.hadoop.yarn.api.records.QueueState;
+import org.apache.hadoop.yarn.api.records.ReservationACL;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.nodelabels.CommonNodeLabelsManager;
@@ -255,6 +256,12 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
   @Private
   public static final String RESERVATION_ENFORCEMENT_WINDOW =
       "reservation-enforcement-window";
+
+  @Private
+  public static final String LAZY_PREEMPTION_ENALBED = PREFIX + "lazy-preemption-enabled";
+
+  @Private
+  public static final boolean DEFAULT_LAZY_PREEMPTION_ENABLED = false;
 
   public CapacitySchedulerConfiguration() {
     this(new Configuration());
@@ -566,6 +573,35 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     set(queuePrefix + getAclKey(acl), aclString);
   }
 
+  private static String getAclKey(ReservationACL acl) {
+    return "acl_" + StringUtils.toLowerCase(acl.toString());
+  }
+
+  @Override
+  public Map<ReservationACL, AccessControlList> getReservationAcls(String
+        queue) {
+    Map<ReservationACL, AccessControlList> resAcls = new HashMap<>();
+    for (ReservationACL acl : ReservationACL.values()) {
+      resAcls.put(acl, getReservationAcl(queue, acl));
+    }
+    return resAcls;
+  }
+
+  private AccessControlList getReservationAcl(String queue, ReservationACL
+        acl) {
+    String queuePrefix = getQueuePrefix(queue);
+    // The root queue defaults to all access if not defined
+    // Sub queues inherit access if not defined
+    String defaultAcl = ALL_ACL;
+    String aclString = get(queuePrefix + getAclKey(acl), defaultAcl);
+    return new AccessControlList(aclString);
+  }
+
+  private void setAcl(String queue, ReservationACL acl, String aclString) {
+    String queuePrefix = getQueuePrefix(queue);
+    set(queuePrefix + getAclKey(acl), aclString);
+  }
+
   public Map<AccessType, AccessControlList> getAcls(String queue) {
     Map<AccessType, AccessControlList> acls =
       new HashMap<AccessType, AccessControlList>();
@@ -577,6 +613,14 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
 
   public void setAcls(String queue, Map<QueueACL, AccessControlList> acls) {
     for (Map.Entry<QueueACL, AccessControlList> e : acls.entrySet()) {
+      setAcl(queue, e.getKey(), e.getValue().getAclString());
+    }
+  }
+
+  @VisibleForTesting
+  public void setReservationAcls(String queue,
+        Map<ReservationACL, AccessControlList> acls) {
+    for (Map.Entry<ReservationACL, AccessControlList> e : acls.entrySet()) {
       setAcl(queue, e.getKey(), e.getValue().getAclString());
     }
   }
@@ -633,7 +677,7 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
    */
   public Resource getMaximumAllocationPerQueue(String queue) {
     String queuePrefix = getQueuePrefix(queue);
-    int maxAllocationMbPerQueue = getInt(queuePrefix + MAXIMUM_ALLOCATION_MB,
+    long maxAllocationMbPerQueue = getInt(queuePrefix + MAXIMUM_ALLOCATION_MB,
         (int)UNDEFINED);
     int maxAllocationVcoresPerQueue = getInt(
         queuePrefix + MAXIMUM_ALLOCATION_VCORES, (int)UNDEFINED);
@@ -646,7 +690,7 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     Resource clusterMax = getMaximumAllocation();
     if (maxAllocationMbPerQueue == (int)UNDEFINED) {
       LOG.info("max alloc mb per queue for " + queue + " is undefined");
-      maxAllocationMbPerQueue = clusterMax.getMemory();
+      maxAllocationMbPerQueue = clusterMax.getMemorySize();
     }
     if (maxAllocationVcoresPerQueue == (int)UNDEFINED) {
        LOG.info("max alloc vcore per queue for " + queue + " is undefined");
@@ -654,7 +698,7 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     }
     Resource result = Resources.createResource(maxAllocationMbPerQueue,
         maxAllocationVcoresPerQueue);
-    if (maxAllocationMbPerQueue > clusterMax.getMemory()
+    if (maxAllocationMbPerQueue > clusterMax.getMemorySize()
         || maxAllocationVcoresPerQueue > clusterMax.getVirtualCores()) {
       throw new IllegalArgumentException(
           "Queue maximum allocation cannot be larger than the cluster setting"
@@ -969,7 +1013,68 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
   @VisibleForTesting
   public void setOrderingPolicyParameter(String queue,
       String parameterKey, String parameterValue) {
-    set(getQueuePrefix(queue) + ORDERING_POLICY + "."
-        + parameterKey, parameterValue);
+    set(getQueuePrefix(queue) + ORDERING_POLICY + "." + parameterKey,
+        parameterValue);
   }
+
+  public boolean getLazyPreemptionEnabled() {
+    return getBoolean(LAZY_PREEMPTION_ENALBED, DEFAULT_LAZY_PREEMPTION_ENABLED);
+  }
+
+  private static final String PREEMPTION_CONFIG_PREFIX =
+      "yarn.resourcemanager.monitor.capacity.preemption.";
+
+  /** If true, run the policy but do not affect the cluster with preemption and
+   * kill events. */
+  public static final String PREEMPTION_OBSERVE_ONLY =
+      PREEMPTION_CONFIG_PREFIX + "observe_only";
+  public static final boolean DEFAULT_PREEMPTION_OBSERVE_ONLY = false;
+
+  /** Time in milliseconds between invocations of this policy */
+  public static final String PREEMPTION_MONITORING_INTERVAL =
+      PREEMPTION_CONFIG_PREFIX + "monitoring_interval";
+  public static final long DEFAULT_PREEMPTION_MONITORING_INTERVAL = 3000L;
+
+  /** Time in milliseconds between requesting a preemption from an application
+   * and killing the container. */
+  public static final String PREEMPTION_WAIT_TIME_BEFORE_KILL =
+      PREEMPTION_CONFIG_PREFIX + "max_wait_before_kill";
+  public static final long DEFAULT_PREEMPTION_WAIT_TIME_BEFORE_KILL = 15000L;
+
+  /** Maximum percentage of resources preemptionCandidates in a single round. By
+   * controlling this value one can throttle the pace at which containers are
+   * reclaimed from the cluster. After computing the total desired preemption,
+   * the policy scales it back within this limit. */
+  public static final String TOTAL_PREEMPTION_PER_ROUND =
+      PREEMPTION_CONFIG_PREFIX + "total_preemption_per_round";
+  public static final float DEFAULT_TOTAL_PREEMPTION_PER_ROUND = 0.1f;
+
+  /** Maximum amount of resources above the target capacity ignored for
+   * preemption. This defines a deadzone around the target capacity that helps
+   * prevent thrashing and oscillations around the computed target balance.
+   * High values would slow the time to capacity and (absent natural
+   * completions) it might prevent convergence to guaranteed capacity. */
+  public static final String PREEMPTION_MAX_IGNORED_OVER_CAPACITY =
+      PREEMPTION_CONFIG_PREFIX + "max_ignored_over_capacity";
+  public static final float DEFAULT_PREEMPTION_MAX_IGNORED_OVER_CAPACITY = 0.1f;
+  /**
+   * Given a computed preemption target, account for containers naturally
+   * expiring and preempt only this percentage of the delta. This determines
+   * the rate of geometric convergence into the deadzone ({@link
+   * #PREEMPTION_MAX_IGNORED_OVER_CAPACITY}). For example, a termination factor of 0.5
+   * will reclaim almost 95% of resources within 5 * {@link
+   * #PREEMPTION_WAIT_TIME_BEFORE_KILL}, even absent natural termination. */
+  public static final String PREEMPTION_NATURAL_TERMINATION_FACTOR =
+      PREEMPTION_CONFIG_PREFIX + "natural_termination_factor";
+  public static final float DEFAULT_PREEMPTION_NATURAL_TERMINATION_FACTOR =
+      0.2f;
+
+  /**
+   * When calculating which containers to be preempted, we will try to preempt
+   * containers for reserved containers first. By default is false.
+   */
+  public static final String PREEMPTION_SELECT_CANDIDATES_FOR_RESERVED_CONTAINERS =
+      PREEMPTION_CONFIG_PREFIX + "select_based_on_reserved_containers";
+  public static final boolean DEFAULT_PREEMPTION_SELECT_CANDIDATES_FOR_RESERVED_CONTAINERS =
+      false;
 }

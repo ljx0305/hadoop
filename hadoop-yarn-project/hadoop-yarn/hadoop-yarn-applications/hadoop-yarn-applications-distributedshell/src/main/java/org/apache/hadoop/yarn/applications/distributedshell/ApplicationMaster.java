@@ -32,6 +32,7 @@ import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -76,6 +77,8 @@ import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerExitStatus;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
+import org.apache.hadoop.yarn.api.records.ContainerRetryContext;
+import org.apache.hadoop.yarn.api.records.ContainerRetryPolicy;
 import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
@@ -88,6 +91,7 @@ import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceRequest;
 import org.apache.hadoop.yarn.api.records.URL;
 import org.apache.hadoop.yarn.api.records.timeline.TimelineEntity;
+import org.apache.hadoop.yarn.api.records.timeline.TimelineEntityGroupId;
 import org.apache.hadoop.yarn.api.records.timeline.TimelineEvent;
 import org.apache.hadoop.yarn.api.records.timeline.TimelinePutResponse;
 import org.apache.hadoop.yarn.client.api.AMRMClient.ContainerRequest;
@@ -99,9 +103,11 @@ import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.security.AMRMTokenIdentifier;
 import org.apache.hadoop.yarn.util.ConverterUtils;
+import org.apache.hadoop.yarn.util.timeline.TimelineUtils;
 import org.apache.log4j.LogManager;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.sun.jersey.api.client.ClientHandlerException;
 
 /**
  * An ApplicationMaster for executing shell commands on a set of launched
@@ -218,7 +224,7 @@ public class ApplicationMaster {
   @VisibleForTesting
   protected int numTotalContainers = 1;
   // Memory to request for the container on which the shell command will run
-  private int containerMemory = 10;
+  private long containerMemory = 10;
   // VirtualCores to request for the container on which the shell command will run
   private int containerVirtualCores = 1;
   // Priority of the request
@@ -253,12 +259,20 @@ public class ApplicationMaster {
   // File length needed for local resource
   private long shellScriptPathLen = 0;
 
+  // Container retry options
+  private ContainerRetryPolicy containerRetryPolicy =
+      ContainerRetryPolicy.NEVER_RETRY;
+  private Set<Integer> containerRetryErrorCodes = null;
+  private int containerMaxRetries = 0;
+  private int containrRetryInterval = 0;
+
   // Timeline domain ID
   private String domainId = null;
 
   // Hardcoded path to shell script in launch container's local env
-  private static final String ExecShellStringPath = Client.SCRIPT_PATH + ".sh";
-  private static final String ExecBatScripStringtPath = Client.SCRIPT_PATH
+  private static final String EXEC_SHELL_STRING_PATH = Client.SCRIPT_PATH
+      + ".sh";
+  private static final String EXEC_BAT_SCRIPT_STRING_PATH = Client.SCRIPT_PATH
       + ".bat";
 
   // Hardcoded path to custom log_properties
@@ -277,6 +291,9 @@ public class ApplicationMaster {
   // Timeline Client
   @VisibleForTesting
   TimelineClient timelineClient;
+  static final String CONTAINER_ENTITY_GROUP_ID = "CONTAINERS";
+  static final String APPID_TIMELINE_FILTER_NAME = "appId";
+  static final String USER_TIMELINE_FILTER_NAME = "user";
 
   private final String linux_bash_command = "bash";
   private final String windows_command = "cmd /c";
@@ -371,6 +388,18 @@ public class ApplicationMaster {
     opts.addOption("num_containers", true,
         "No. of containers on which the shell command needs to be executed");
     opts.addOption("priority", true, "Application Priority. Default 0");
+    opts.addOption("container_retry_policy", true,
+        "Retry policy when container fails to run, "
+            + "0: NEVER_RETRY, 1: RETRY_ON_ALL_ERRORS, "
+            + "2: RETRY_ON_SPECIFIC_ERROR_CODES");
+    opts.addOption("container_retry_error_codes", true,
+        "When retry policy is set to RETRY_ON_SPECIFIC_ERROR_CODES, error "
+            + "codes is specified with this option, "
+            + "e.g. --container_retry_error_codes 1,2,3");
+    opts.addOption("container_max_retries", true,
+        "If container could retry, it specifies max retires");
+    opts.addOption("container_retry_interval", true,
+        "Interval between each retry, unit is milliseconds");
     opts.addOption("debug", false, "Dump out debug information");
 
     opts.addOption("help", false, "Print usage");
@@ -508,6 +537,21 @@ public class ApplicationMaster {
     }
     requestPriority = Integer.parseInt(cliParser
         .getOptionValue("priority", "0"));
+
+    containerRetryPolicy = ContainerRetryPolicy.values()[
+        Integer.parseInt(cliParser.getOptionValue(
+            "container_retry_policy", "0"))];
+    if (cliParser.hasOption("container_retry_error_codes")) {
+      containerRetryErrorCodes = new HashSet<>();
+      for (String errorCode :
+          cliParser.getOptionValue("container_retry_error_codes").split(",")) {
+        containerRetryErrorCodes.add(Integer.parseInt(errorCode));
+      }
+    }
+    containerMaxRetries = Integer.parseInt(
+        cliParser.getOptionValue("container_max_retries", "0"));
+    containrRetryInterval = Integer.parseInt(cliParser.getOptionValue(
+        "container_retry_interval", "0"));
     return true;
   }
 
@@ -587,7 +631,7 @@ public class ApplicationMaster {
             appMasterTrackingUrl);
     // Dump out information about cluster capability as seen by the
     // resource manager
-    int maxMem = response.getMaximumResourceCapability().getMemory();
+    long maxMem = response.getMaximumResourceCapability().getMemorySize();
     LOG.info("Max mem capability of resources in this cluster " + maxMem);
     
     int maxVCores = response.getMaximumResourceCapability().getVirtualCores();
@@ -701,8 +745,8 @@ public class ApplicationMaster {
     FinalApplicationStatus appStatus;
     String appMessage = null;
     boolean success = true;
-    if (numFailedContainers.get() == 0 && 
-        numCompletedContainers.get() == numTotalContainers) {
+    if (numCompletedContainers.get() - numFailedContainers.get()
+        >= numTotalContainers) {
       appStatus = FinalApplicationStatus.SUCCEEDED;
     } else {
       appStatus = FinalApplicationStatus.FAILED;
@@ -817,7 +861,7 @@ public class ApplicationMaster {
             + ":" + allocatedContainer.getNodeId().getPort()
             + ", containerNodeURI=" + allocatedContainer.getNodeHttpAddress()
             + ", containerResourceMemory"
-            + allocatedContainer.getResource().getMemory()
+            + allocatedContainer.getResource().getMemorySize()
             + ", containerResourceVirtualCores"
             + allocatedContainer.getResource().getVirtualCores());
         // + ", containerToken"
@@ -904,7 +948,7 @@ public class ApplicationMaster {
         applicationMaster.nmClientAsync.getContainerStatusAsync(containerId, container.getNodeId());
       }
       if(applicationMaster.timelineClient != null) {
-        ApplicationMaster.publishContainerStartEvent(
+        applicationMaster.publishContainerStartEvent(
             applicationMaster.timelineClient, container,
             applicationMaster.domainId, applicationMaster.appSubmitterUgi);
       }
@@ -1020,8 +1064,8 @@ public class ApplicationMaster {
         LocalResource shellRsrc = LocalResource.newInstance(yarnUrl,
           LocalResourceType.FILE, LocalResourceVisibility.APPLICATION,
           shellScriptPathLen, shellScriptPathTimestamp);
-        localResources.put(Shell.WINDOWS ? ExecBatScripStringtPath :
-            ExecShellStringPath, shellRsrc);
+        localResources.put(Shell.WINDOWS ? EXEC_BAT_SCRIPT_STRING_PATH :
+            EXEC_SHELL_STRING_PATH, shellRsrc);
         shellCommand = Shell.WINDOWS ? windows_command : linux_bash_command;
       }
 
@@ -1032,8 +1076,8 @@ public class ApplicationMaster {
       vargs.add(shellCommand);
       // Set shell script path
       if (!scriptPath.isEmpty()) {
-        vargs.add(Shell.WINDOWS ? ExecBatScripStringtPath
-            : ExecShellStringPath);
+        vargs.add(Shell.WINDOWS ? EXEC_BAT_SCRIPT_STRING_PATH
+            : EXEC_SHELL_STRING_PATH);
       }
 
       // Set args for the shell command if any
@@ -1062,9 +1106,13 @@ public class ApplicationMaster {
       // "hadoop dfs" command inside the distributed shell.
       Map<String, String> myShellEnv = new HashMap<String, String>(shellEnv);
       myShellEnv.put(YARN_SHELL_ID, shellId);
+      ContainerRetryContext containerRetryContext =
+          ContainerRetryContext.newInstance(
+              containerRetryPolicy, containerRetryErrorCodes,
+              containerMaxRetries, containrRetryInterval);
       ContainerLaunchContext ctx = ContainerLaunchContext.newInstance(
         localResources, myShellEnv, commands, null, allTokens.duplicate(),
-          null);
+          null, containerRetryContext);
       containerListener.addContainer(container.getId(), container);
       nmClientAsync.startContainerAsync(container, ctx);
     }
@@ -1120,15 +1168,17 @@ public class ApplicationMaster {
       org.apache.commons.io.IOUtils.closeQuietly(ds);
     }
   }
-  
-  private static void publishContainerStartEvent(
-      final TimelineClient timelineClient, Container container, String domainId,
-      UserGroupInformation ugi) {
+
+  private void publishContainerStartEvent(
+      final TimelineClient timelineClient, final Container container,
+      String domainId, UserGroupInformation ugi) {
     final TimelineEntity entity = new TimelineEntity();
     entity.setEntityId(container.getId().toString());
     entity.setEntityType(DSEntity.DS_CONTAINER.toString());
     entity.setDomainId(domainId);
-    entity.addPrimaryFilter("user", ugi.getShortUserName());
+    entity.addPrimaryFilter(USER_TIMELINE_FILTER_NAME, ugi.getShortUserName());
+    entity.addPrimaryFilter(APPID_TIMELINE_FILTER_NAME, container.getId()
+        .getApplicationAttemptId().getApplicationId().toString());
     TimelineEvent event = new TimelineEvent();
     event.setTimestamp(System.currentTimeMillis());
     event.setEventType(DSEvent.DS_CONTAINER_START.toString());
@@ -1137,28 +1187,28 @@ public class ApplicationMaster {
     entity.addEvent(event);
 
     try {
-      ugi.doAs(new PrivilegedExceptionAction<TimelinePutResponse>() {
-        @Override
-        public TimelinePutResponse run() throws Exception {
-          return processTimelineResponseErrors(
-              timelineClient.putEntities(entity));
-        }
-      });
-    } catch (Exception e) {
+      processTimelineResponseErrors(
+          putContainerEntity(timelineClient,
+              container.getId().getApplicationAttemptId(),
+              entity));
+    } catch (YarnException | IOException | ClientHandlerException e) {
       LOG.error("Container start event could not be published for "
-          + container.getId().toString(),
-          e instanceof UndeclaredThrowableException ? e.getCause() : e);
+          + container.getId().toString(), e);
     }
   }
 
-  private static void publishContainerEndEvent(
+  @VisibleForTesting
+  void publishContainerEndEvent(
       final TimelineClient timelineClient, ContainerStatus container,
       String domainId, UserGroupInformation ugi) {
     final TimelineEntity entity = new TimelineEntity();
     entity.setEntityId(container.getContainerId().toString());
     entity.setEntityType(DSEntity.DS_CONTAINER.toString());
     entity.setDomainId(domainId);
-    entity.addPrimaryFilter("user", ugi.getShortUserName());
+    entity.addPrimaryFilter(USER_TIMELINE_FILTER_NAME, ugi.getShortUserName());
+    entity.addPrimaryFilter(APPID_TIMELINE_FILTER_NAME,
+        container.getContainerId().getApplicationAttemptId()
+            .getApplicationId().toString());
     TimelineEvent event = new TimelineEvent();
     event.setTimestamp(System.currentTimeMillis());
     event.setEventType(DSEvent.DS_CONTAINER_END.toString());
@@ -1166,22 +1216,38 @@ public class ApplicationMaster {
     event.addEventInfo("Exit Status", container.getExitStatus());
     entity.addEvent(event);
     try {
-      TimelinePutResponse response = timelineClient.putEntities(entity);
-      processTimelineResponseErrors(response);
-    } catch (YarnException | IOException e) {
+      processTimelineResponseErrors(
+          putContainerEntity(timelineClient,
+              container.getContainerId().getApplicationAttemptId(),
+              entity));
+    } catch (YarnException | IOException | ClientHandlerException e) {
       LOG.error("Container end event could not be published for "
           + container.getContainerId().toString(), e);
     }
   }
 
-  private static void publishApplicationAttemptEvent(
+  private TimelinePutResponse putContainerEntity(
+      TimelineClient timelineClient, ApplicationAttemptId currAttemptId,
+      TimelineEntity entity)
+      throws YarnException, IOException {
+    if (TimelineUtils.timelineServiceV1_5Enabled(conf)) {
+      TimelineEntityGroupId groupId = TimelineEntityGroupId.newInstance(
+          currAttemptId.getApplicationId(),
+          CONTAINER_ENTITY_GROUP_ID);
+      return timelineClient.putEntities(currAttemptId, groupId, entity);
+    } else {
+      return timelineClient.putEntities(entity);
+    }
+  }
+
+  private void publishApplicationAttemptEvent(
       final TimelineClient timelineClient, String appAttemptId,
       DSEvent appEvent, String domainId, UserGroupInformation ugi) {
     final TimelineEntity entity = new TimelineEntity();
     entity.setEntityId(appAttemptId);
     entity.setEntityType(DSEntity.DS_APP_ATTEMPT.toString());
     entity.setDomainId(domainId);
-    entity.addPrimaryFilter("user", ugi.getShortUserName());
+    entity.addPrimaryFilter(USER_TIMELINE_FILTER_NAME, ugi.getShortUserName());
     TimelineEvent event = new TimelineEvent();
     event.setEventType(appEvent.toString());
     event.setTimestamp(System.currentTimeMillis());
@@ -1189,7 +1255,7 @@ public class ApplicationMaster {
     try {
       TimelinePutResponse response = timelineClient.putEntities(entity);
       processTimelineResponseErrors(response);
-    } catch (YarnException | IOException e) {
+    } catch (YarnException | IOException | ClientHandlerException e) {
       LOG.error("App Attempt "
           + (appEvent.equals(DSEvent.DS_APP_ATTEMPT_START) ? "start" : "end")
           + " event could not be published for "
@@ -1197,7 +1263,7 @@ public class ApplicationMaster {
     }
   }
 
-  private static TimelinePutResponse processTimelineResponseErrors(
+  private TimelinePutResponse processTimelineResponseErrors(
       TimelinePutResponse response) {
     List<TimelinePutResponse.TimelinePutError> errors = response.getErrors();
     if (errors.size() == 0) {

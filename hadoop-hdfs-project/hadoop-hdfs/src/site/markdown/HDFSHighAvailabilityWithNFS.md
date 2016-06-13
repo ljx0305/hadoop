@@ -142,15 +142,15 @@ The order in which you set these configurations is unimportant, but the values y
 
         <property>
           <name>dfs.namenode.rpc-address.mycluster.nn1</name>
-          <value>machine1.example.com:8020</value>
+          <value>machine1.example.com:9820</value>
         </property>
         <property>
           <name>dfs.namenode.rpc-address.mycluster.nn2</name>
-          <value>machine2.example.com:8020</value>
+          <value>machine2.example.com:9820</value>
         </property>
         <property>
           <name>dfs.namenode.rpc-address.mycluster.nn3</name>
-          <value>machine3.example.com:8020</value>
+          <value>machine3.example.com:9820</value>
         </property>
 
     **Note:** You may similarly configure the "**servicerpc-address**" setting if
@@ -163,15 +163,15 @@ The order in which you set these configurations is unimportant, but the values y
 
         <property>
           <name>dfs.namenode.http-address.mycluster.nn1</name>
-          <value>machine1.example.com:50070</value>
+          <value>machine1.example.com:9870</value>
         </property>
         <property>
           <name>dfs.namenode.http-address.mycluster.nn2</name>
-          <value>machine2.example.com:50070</value>
+          <value>machine2.example.com:9870</value>
         </property>
         <property>
           <name>dfs.namenode.http-address.mycluster.nn3</name>
-          <value>machine3.example.com:50070</value>
+          <value>machine3.example.com:9870</value>
         </property>
 
     **Note:** If you have Hadoop's security features enabled, you should also set
@@ -475,7 +475,7 @@ There are also several other configuration parameters which may be set to contro
 
 After the configuration keys have been added, the next step is to initialize required state in ZooKeeper. You can do so by running the following command from one of the NameNode hosts.
 
-    [hdfs]$ $HADOOP_PREFIX/bin/zkfc -formatZK
+    [hdfs]$ $HADOOP_HOME/bin/zkfc -formatZK
 
 This will create a znode in ZooKeeper inside of which the automatic failover system stores its data.
 
@@ -487,7 +487,7 @@ Since automatic failover has been enabled in the configuration, the `start-dfs.s
 
 If you manually manage the services on your cluster, you will need to manually start the `zkfc` daemon on each of the machines that runs a NameNode. You can start the daemon by running:
 
-    [hdfs]$ $HADOOP_PREFIX/bin/hdfs --daemon start zkfc
+    [hdfs]$ $HADOOP_HOME/bin/hdfs --daemon start zkfc
 
 ### Securing access to ZooKeeper
 

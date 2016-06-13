@@ -49,8 +49,6 @@ public class DistCpOptions {
   private int maxMaps = DistCpConstants.DEFAULT_MAPS;
   private float mapBandwidth = DistCpConstants.DEFAULT_BANDWIDTH_MB;
 
-  private String sslConfigurationFile;
-
   private String copyStrategy = DistCpConstants.UNIFORMSIZE;
 
   private EnumSet<FileAttribute> preserveStatus = EnumSet.noneOf(FileAttribute.class);
@@ -134,7 +132,6 @@ public class DistCpOptions {
       this.numListstatusThreads = that.numListstatusThreads;
       this.maxMaps = that.maxMaps;
       this.mapBandwidth = that.mapBandwidth;
-      this.sslConfigurationFile = that.getSslConfigurationFile();
       this.copyStrategy = that.copyStrategy;
       this.preserveStatus = that.preserveStatus;
       this.preserveRawXattrs = that.preserveRawXattrs;
@@ -163,7 +160,6 @@ public class DistCpOptions {
    * @param atomicCommit - boolean switch
    */
   public void setAtomicCommit(boolean atomicCommit) {
-    validate(DistCpOptionSwitch.ATOMIC_COMMIT, atomicCommit);
     this.atomicCommit = atomicCommit;
   }
 
@@ -182,7 +178,6 @@ public class DistCpOptions {
    * @param syncFolder - boolean switch
    */
   public void setSyncFolder(boolean syncFolder) {
-    validate(DistCpOptionSwitch.SYNC_FOLDERS, syncFolder);
     this.syncFolder = syncFolder;
   }
 
@@ -201,7 +196,6 @@ public class DistCpOptions {
    * @param deleteMissing - boolean switch
    */
   public void setDeleteMissing(boolean deleteMissing) {
-    validate(DistCpOptionSwitch.DELETE_MISSING, deleteMissing);
     this.deleteMissing = deleteMissing;
   }
 
@@ -257,7 +251,6 @@ public class DistCpOptions {
    * @param overwrite - boolean switch
    */
   public void setOverwrite(boolean overwrite) {
-    validate(DistCpOptionSwitch.OVERWRITE, overwrite);
     this.overwrite = overwrite;
   }
 
@@ -273,7 +266,6 @@ public class DistCpOptions {
    * update option and CRC is not skipped.
    */
   public void setAppend(boolean append) {
-    validate(DistCpOptionSwitch.APPEND, append);
     this.append = append;
   }
 
@@ -290,7 +282,6 @@ public class DistCpOptions {
   }
 
   public void setUseDiff(boolean useDiff, String fromSnapshot, String toSnapshot) {
-    validate(DistCpOptionSwitch.DIFF, useDiff);
     this.useDiff = useDiff;
     this.fromSnapshot = fromSnapshot;
     this.toSnapshot = toSnapshot;
@@ -317,7 +308,6 @@ public class DistCpOptions {
    * @param skipCRC - boolean switch
    */
   public void setSkipCRC(boolean skipCRC) {
-    validate(DistCpOptionSwitch.SKIP_CRC, skipCRC);
     this.skipCRC = skipCRC;
   }
 
@@ -378,24 +368,6 @@ public class DistCpOptions {
   public void setMapBandwidth(float mapBandwidth) {
     assert mapBandwidth > 0 : "Bandwidth " + mapBandwidth + " is invalid (should be > 0)";
     this.mapBandwidth = mapBandwidth;
-  }
-
-  /**
-   * Get path where the ssl configuration file is present to use for hftps://
-   *
-   * @return Path on local file system
-   */
-  public String getSslConfigurationFile() {
-    return sslConfigurationFile;
-  }
-
-  /**
-   * Set the SSL configuration file path to use with hftps:// (local path)
-   *
-   * @param sslConfigurationFile - Local ssl config file path
-   */
-  public void setSslConfigurationFile(String sslConfigurationFile) {
-    this.sslConfigurationFile = sslConfigurationFile;
   }
 
   /**
@@ -572,20 +544,15 @@ public class DistCpOptions {
     this.filtersFile = filtersFilename;
   }
 
-  public void validate(DistCpOptionSwitch option, boolean value) {
-
-    boolean syncFolder = (option == DistCpOptionSwitch.SYNC_FOLDERS ?
-        value : this.syncFolder);
-    boolean overwrite = (option == DistCpOptionSwitch.OVERWRITE ?
-        value : this.overwrite);
-    boolean deleteMissing = (option == DistCpOptionSwitch.DELETE_MISSING ?
-        value : this.deleteMissing);
-    boolean atomicCommit = (option == DistCpOptionSwitch.ATOMIC_COMMIT ?
-        value : this.atomicCommit);
-    boolean skipCRC = (option == DistCpOptionSwitch.SKIP_CRC ?
-        value : this.skipCRC);
-    boolean append = (option == DistCpOptionSwitch.APPEND ? value : this.append);
-    boolean useDiff = (option == DistCpOptionSwitch.DIFF ? value : this.useDiff);
+  void validate() {
+    if (useDiff && deleteMissing) {
+      // -delete and -diff are mutually exclusive. For backward compatibility,
+      // we ignore the -delete option here, instead of throwing an
+      // IllegalArgumentException. See HDFS-10397 for more discussion.
+      OptionsParser.LOG.warn("-delete and -diff are mutually exclusive. " +
+          "The -delete option will be ignored.");
+      setDeleteMissing(false);
+    }
 
     if (syncFolder && atomicCommit) {
       throw new IllegalArgumentException("Atomic commit can't be used with " +
@@ -614,7 +581,7 @@ public class DistCpOptions {
       throw new IllegalArgumentException(
           "Append is disallowed when skipping CRC");
     }
-    if ((!syncFolder || deleteMissing) && useDiff) {
+    if (!syncFolder && useDiff) {
       throw new IllegalArgumentException(
           "Diff is valid only with update options");
     }
@@ -664,14 +631,21 @@ public class DistCpOptions {
         ", syncFolder=" + syncFolder +
         ", deleteMissing=" + deleteMissing +
         ", ignoreFailures=" + ignoreFailures +
+        ", overwrite=" + overwrite +
+        ", skipCRC=" + skipCRC +
+        ", blocking=" + blocking +
+        ", numListstatusThreads=" + numListstatusThreads +
         ", maxMaps=" + maxMaps +
-        ", sslConfigurationFile='" + sslConfigurationFile + '\'' +
+        ", mapBandwidth=" + mapBandwidth +
         ", copyStrategy='" + copyStrategy + '\'' +
+        ", preserveStatus=" + preserveStatus +
+        ", preserveRawXattrs=" + preserveRawXattrs +
+        ", atomicWorkPath=" + atomicWorkPath +
+        ", logPath=" + logPath +
         ", sourceFileListing=" + sourceFileListing +
         ", sourcePaths=" + sourcePaths +
         ", targetPath=" + targetPath +
         ", targetPathExists=" + targetPathExists +
-        ", preserveRawXattrs=" + preserveRawXattrs +
         ", filtersFile='" + filtersFile + '\'' +
         '}';
   }

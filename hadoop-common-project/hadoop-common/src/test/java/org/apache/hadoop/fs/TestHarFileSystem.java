@@ -210,6 +210,8 @@ public class TestHarFileSystem {
     public void setStoragePolicy(Path src, String policyName)
         throws IOException;
 
+    public void unsetStoragePolicy(Path src) throws IOException;
+
     public BlockStoragePolicySpi getStoragePolicy(final Path src)
         throws IOException;
 
@@ -219,6 +221,7 @@ public class TestHarFileSystem {
     public Path getTrashRoot(Path path) throws IOException;
 
     public Collection<FileStatus> getTrashRoots(boolean allUsers) throws IOException;
+    StorageStatistics getStorageStatistics();
   }
 
   @Test

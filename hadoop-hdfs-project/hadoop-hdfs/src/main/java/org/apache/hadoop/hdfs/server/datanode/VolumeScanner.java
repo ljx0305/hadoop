@@ -216,9 +216,8 @@ public class VolumeScanner extends Thread {
   }
 
   public void printStats(StringBuilder p) {
-    p.append("Block scanner information for volume " +
-        volume.getStorageID() + " with base path " + volume.getBasePath() +
-        "%n");
+    p.append(String.format("Block scanner information for volume %s with base" +
+        " path %s%n", volume.getStorageID(), volume.getBasePath()));
     synchronized (stats) {
       p.append(String.format("Bytes verified in last hour       : %57d%n",
           stats.bytesScannedInPastHour));
@@ -245,7 +244,7 @@ public class VolumeScanner extends Thread {
           stats.lastBlockScanned.toString())));
       p.append(String.format("More blocks to scan in period     : %57s%n",
           !stats.eof));
-      p.append("%n");
+      p.append(System.lineSeparator());
     }
   }
 
@@ -415,7 +414,7 @@ public class VolumeScanner extends Thread {
       Block b = volume.getDataset().getStoredBlock(
           cblock.getBlockPoolId(), cblock.getBlockId());
       if (b == null) {
-        LOG.info("FileNotFound while finding block {} on volume {}",
+        LOG.info("Replica {} was not found in the VolumeMap for volume {}",
             cblock, volume.getBasePath());
       } else {
         block = new ExtendedBlock(cblock.getBlockPoolId(), b);

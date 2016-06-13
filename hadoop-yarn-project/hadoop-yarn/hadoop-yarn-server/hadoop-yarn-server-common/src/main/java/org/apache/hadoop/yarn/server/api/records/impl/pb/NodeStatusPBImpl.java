@@ -33,6 +33,7 @@ import org.apache.hadoop.yarn.api.records.impl.pb.ContainerPBImpl;
 import org.apache.hadoop.yarn.api.records.impl.pb.ContainerStatusPBImpl;
 import org.apache.hadoop.yarn.api.records.impl.pb.NodeIdPBImpl;
 import org.apache.hadoop.yarn.api.records.impl.pb.ResourceUtilizationPBImpl;
+import org.apache.hadoop.yarn.proto.YarnProtos;
 import org.apache.hadoop.yarn.proto.YarnProtos.ApplicationIdProto;
 import org.apache.hadoop.yarn.proto.YarnProtos.ContainerStatusProto;
 import org.apache.hadoop.yarn.proto.YarnProtos.ContainerProto;
@@ -40,7 +41,9 @@ import org.apache.hadoop.yarn.proto.YarnProtos.NodeIdProto;
 import org.apache.hadoop.yarn.proto.YarnServerCommonProtos.NodeHealthStatusProto;
 import org.apache.hadoop.yarn.proto.YarnServerCommonProtos.NodeStatusProto;
 import org.apache.hadoop.yarn.proto.YarnServerCommonProtos.NodeStatusProtoOrBuilder;
-import org.apache.hadoop.yarn.proto.YarnProtos.ResourceUtilizationProto;
+import org.apache.hadoop.yarn.proto.YarnServerCommonProtos.QueuedContainersStatusProto;
+
+import org.apache.hadoop.yarn.server.api.records.QueuedContainersStatus;
 import org.apache.hadoop.yarn.server.api.records.NodeHealthStatus;
 import org.apache.hadoop.yarn.server.api.records.NodeStatus;
 
@@ -400,6 +403,28 @@ public class NodeStatusPBImpl extends NodeStatus {
     this.increasedContainers = increasedContainers;
   }
 
+  @Override
+  public synchronized QueuedContainersStatus getQueuedContainersStatus() {
+    NodeStatusProtoOrBuilder p =
+        this.viaProto ? this.proto : this.builder;
+    if (!p.hasQueuedContainerStatus()) {
+      return null;
+    }
+    return convertFromProtoFormat(p.getQueuedContainerStatus());
+  }
+
+  @Override
+  public synchronized void setQueuedContainersStatus(
+      QueuedContainersStatus queuedContainersStatus) {
+    maybeInitBuilder();
+    if (queuedContainersStatus == null) {
+      this.builder.clearQueuedContainerStatus();
+      return;
+    }
+    this.builder.setQueuedContainerStatus(
+        convertToProtoFormat(queuedContainersStatus));
+  }
+
   private NodeIdProto convertToProtoFormat(NodeId nodeId) {
     return ((NodeIdPBImpl)nodeId).getProto();
   }
@@ -433,13 +458,24 @@ public class NodeStatusPBImpl extends NodeStatus {
     return ((ApplicationIdPBImpl)c).getProto();
   }
 
-  private ResourceUtilizationProto convertToProtoFormat(ResourceUtilization r) {
+  private YarnProtos.ResourceUtilizationProto convertToProtoFormat(
+      ResourceUtilization r) {
     return ((ResourceUtilizationPBImpl) r).getProto();
   }
 
   private ResourceUtilizationPBImpl convertFromProtoFormat(
-      ResourceUtilizationProto p) {
+      YarnProtos.ResourceUtilizationProto p) {
     return new ResourceUtilizationPBImpl(p);
+  }
+
+  private QueuedContainersStatusProto convertToProtoFormat(
+      QueuedContainersStatus r) {
+    return ((QueuedContainersStatusPBImpl) r).getProto();
+  }
+
+  private QueuedContainersStatus convertFromProtoFormat(
+      QueuedContainersStatusProto p) {
+    return new QueuedContainersStatusPBImpl(p);
   }
 
   private ContainerPBImpl convertFromProtoFormat(

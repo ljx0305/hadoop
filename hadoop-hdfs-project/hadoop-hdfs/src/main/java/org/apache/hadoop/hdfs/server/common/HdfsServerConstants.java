@@ -61,8 +61,7 @@ public interface HdfsServerConstants {
   // An invalid transaction ID that will never be seen in a real namesystem.
   long INVALID_TXID = -12345;
   // Number of generation stamps reserved for legacy blocks.
-  long RESERVED_GENERATION_STAMPS_V1 =
-      1024L * 1024 * 1024 * 1024;
+  long RESERVED_LEGACY_GENERATION_STAMPS = 1024L * 1024 * 1024 * 1024;
   /**
    * Current layout version for NameNode.
    * Please see {@link NameNodeLayoutVersion.Feature} on adding new layout version.
@@ -362,7 +361,6 @@ public interface HdfsServerConstants {
   }
   
   String NAMENODE_LEASE_HOLDER = "HDFS_NameNode";
-  long NAMENODE_LEASE_RECHECK_INTERVAL = 2000;
 
   String CRYPTO_XATTR_ENCRYPTION_ZONE =
       "raw.hdfs.crypto.encryption.zone";

@@ -19,9 +19,12 @@ package org.apache.hadoop.hdfs.server.datanode;
 
 import static org.apache.hadoop.test.MetricsAsserts.assertCounter;
 import static org.apache.hadoop.test.MetricsAsserts.getMetrics;
+import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
@@ -442,6 +445,41 @@ public class TestDataNodeVolumeFailureReporting {
     checkFailuresAtNameNode(dm, dns.get(1), true);
   }
 
+  @Test
+  public void testAutoFormatEmptyDirectory() throws Exception {
+    // remove the version file
+    File dn1Vol1 = cluster.getStorageDir(0, 0);
+    File current = new File(dn1Vol1, "current");
+    File currentVersion = new File(current, "VERSION");
+    currentVersion.delete();
+    // restart the data node
+    assertTrue(cluster.restartDataNodes(true));
+    // the DN should tolerate one volume failure.
+    cluster.waitActive();
+    ArrayList<DataNode> dns = cluster.getDataNodes();
+    DataNode dn = dns.get(0);
+    assertFalse("DataNode should not reformat if VERSION is missing",
+        currentVersion.exists());
+
+    // Make sure DN's JMX sees the failed volume
+    final String[] expectedFailedVolumes = {dn1Vol1.getAbsolutePath()};
+    DataNodeTestUtils.triggerHeartbeat(dn);
+    FsDatasetSpi<?> fsd = dn.getFSDataset();
+    assertEquals(expectedFailedVolumes.length, fsd.getNumFailedVolumes());
+    assertArrayEquals(expectedFailedVolumes, fsd.getFailedStorageLocations());
+    // there shouldn't be any more volume failures due to I/O failure
+    checkFailuresAtDataNode(dn, 0, false, expectedFailedVolumes);
+
+    // The NN reports one volume failures
+    final DatanodeManager dm = cluster.getNamesystem().getBlockManager().
+        getDatanodeManager();
+    long dnCapacity = DFSTestUtil.getDatanodeCapacity(dm, 0);
+    DFSTestUtil.waitForDatanodeStatus(dm, 1, 0, 1,
+        (1*dnCapacity), WAIT_FOR_HEARTBEATS);
+    checkAggregateFailuresAtNameNode(false, 1);
+    checkFailuresAtNameNode(dm, dns.get(0), false, dn1Vol1.getAbsolutePath());
+  }
+
   /**
    * Checks the NameNode for correct values of aggregate counters tracking failed
    * volumes across all DataNodes.
@@ -591,8 +629,11 @@ public class TestDataNodeVolumeFailureReporting {
       dnNewDataDirs.append(newVol.getAbsolutePath());
     }
     try {
-      dn.reconfigurePropertyImpl(DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY,
-          dnNewDataDirs.toString());
+      assertThat(
+          dn.reconfigurePropertyImpl(
+              DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY,
+              dnNewDataDirs.toString()),
+          is(dn.getConf().get(DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY)));
     } catch (ReconfigurationException e) {
       // This can be thrown if reconfiguration tries to use a failed volume.
       // We need to swallow the exception, because some of our tests want to

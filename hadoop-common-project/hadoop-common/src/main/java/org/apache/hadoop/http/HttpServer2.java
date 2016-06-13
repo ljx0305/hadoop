@@ -55,14 +55,10 @@ import org.apache.hadoop.conf.ConfServlet;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeys;
 import org.apache.hadoop.security.AuthenticationFilterInitializer;
-import org.apache.hadoop.security.authentication.util.FileSignerSecretProvider;
-import org.apache.hadoop.security.authentication.util.RandomSignerSecretProvider;
 import org.apache.hadoop.security.authentication.util.SignerSecretProvider;
-import org.apache.hadoop.security.authentication.util.ZKSignerSecretProvider;
 import org.apache.hadoop.security.ssl.SslSocketConnectorSecure;
 import org.apache.hadoop.jmx.JMXJsonServlet;
 import org.apache.hadoop.log.LogLevel;
-import org.apache.hadoop.metrics.MetricsServlet;
 import org.apache.hadoop.security.SecurityUtil;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authentication.server.AuthenticationFilter;
@@ -98,8 +94,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.sun.jersey.spi.container.servlet.ServletContainer;
 
-import static org.apache.hadoop.security.authentication.server
-    .AuthenticationFilter.*;
 /**
  * Create a Jetty embedded server to answer http requests. The primary goal is
  * to serve up status information for the server. There are three contexts:
@@ -172,6 +166,7 @@ public final class HttpServer2 implements FilterContainer {
     private String hostName;
     private boolean disallowFallbackToRandomSignerSecretProvider;
     private String authFilterConfigurationPrefix = "hadoop.http.authentication.";
+    private String excludeCiphers;
 
     public Builder setName(String name){
       this.name = name;
@@ -276,6 +271,11 @@ public final class HttpServer2 implements FilterContainer {
       return this;
     }
 
+    public Builder excludeCiphers(String pExcludeCiphers) {
+      this.excludeCiphers = pExcludeCiphers;
+      return this;
+    }
+
     public HttpServer2 build() throws IOException {
       Preconditions.checkNotNull(name, "name is not set");
       Preconditions.checkState(!endpoints.isEmpty(), "No endpoints specified");
@@ -316,6 +316,12 @@ public final class HttpServer2 implements FilterContainer {
             c.setTruststoreType(trustStoreType);
             c.setTrustPassword(trustStorePassword);
           }
+
+          if(null != excludeCiphers && !excludeCiphers.isEmpty()) {
+            c.setExcludeCipherSuites(excludeCiphers.split(","));
+            LOG.info("Excluded Cipher List:" + excludeCiphers);
+          }
+
           listener = c;
 
         } else {
@@ -565,14 +571,11 @@ public final class HttpServer2 implements FilterContainer {
 
   /**
    * Add default servlets.
-   * Note: /metrics servlet will be removed in 3.X release.
    */
-  @SuppressWarnings("deprecation")
   protected void addDefaultServlets() {
     // set up default servlets
     addServlet("stacks", "/stacks", StackServlet.class);
     addServlet("logLevel", "/logLevel", LogLevel.Servlet.class);
-    addServlet("metrics", "/metrics", MetricsServlet.class);
     addServlet("jmx", "/jmx", JMXJsonServlet.class);
     addServlet("conf", "/conf", ConfServlet.class);
   }
@@ -1112,9 +1115,11 @@ public final class HttpServer2 implements FilterContainer {
   /**
    * A Servlet input filter that quotes all HTML active characters in the
    * parameter names and values. The goal is to quote the characters to make
-   * all of the servlets resistant to cross-site scripting attacks.
+   * all of the servlets resistant to cross-site scripting attacks. It also
+   * sets X-FRAME-OPTIONS in the header to mitigate clickjacking attacks.
    */
   public static class QuotingInputFilter implements Filter {
+    private static final XFrameOption X_FRAME_OPTION = XFrameOption.SAMEORIGIN;
     private FilterConfig config;
 
     public static class RequestQuoter extends HttpServletRequestWrapper {
@@ -1234,6 +1239,7 @@ public final class HttpServer2 implements FilterContainer {
       } else if (mime.startsWith("application/xml")) {
         httpResponse.setContentType("text/xml; charset=utf-8");
       }
+      httpResponse.addHeader("X-FRAME-OPTIONS", X_FRAME_OPTION.toString());
       chain.doFilter(quoted, httpResponse);
     }
 
@@ -1249,5 +1255,24 @@ public final class HttpServer2 implements FilterContainer {
       return (mimeBuffer == null) ? null : mimeBuffer.toString();
     }
 
+  }
+
+  /**
+   * The X-FRAME-OPTIONS header in HTTP response to mitigate clickjacking
+   * attack.
+   */
+  public enum XFrameOption {
+    DENY("DENY") , SAMEORIGIN ("SAMEORIGIN"), ALLOWFROM ("ALLOW-FROM");
+
+    XFrameOption(String name) {
+      this.name = name;
+    }
+
+    private final String name;
+
+    @Override
+    public String toString() {
+      return this.name;
+    }
   }
 }

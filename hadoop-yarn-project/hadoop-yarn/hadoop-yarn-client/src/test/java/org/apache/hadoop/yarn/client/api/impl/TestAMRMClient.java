@@ -35,11 +35,11 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.CommonConfigurationKeys;
 import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.security.Credentials;
@@ -61,6 +61,7 @@ import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
 import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
+import org.apache.hadoop.yarn.api.records.ExecutionType;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.LocalResource;
 import org.apache.hadoop.yarn.api.records.NMToken;
@@ -413,11 +414,13 @@ public class TestAMRMClient {
       amClient.addContainerRequest(storedContainer3);
       
       // test addition and storage
-      int containersRequestedAny = amClient.remoteRequestsTable.get(priority)
-       .get(ResourceRequest.ANY).get(capability).remoteRequest.getNumContainers();
+      int containersRequestedAny = amClient.remoteRequestsTable.get(priority,
+          ResourceRequest.ANY, ExecutionType.GUARANTEED, capability)
+          .remoteRequest.getNumContainers();
       assertEquals(2, containersRequestedAny);
-      containersRequestedAny = amClient.remoteRequestsTable.get(priority1)
-          .get(ResourceRequest.ANY).get(capability).remoteRequest.getNumContainers();
+      containersRequestedAny = amClient.remoteRequestsTable.get(priority1,
+          ResourceRequest.ANY, ExecutionType.GUARANTEED, capability)
+          .remoteRequest.getNumContainers();
          assertEquals(1, containersRequestedAny);
       List<? extends Collection<ContainerRequest>> matches = 
           amClient.getMatchingRequests(priority, node, capability);
@@ -713,6 +716,17 @@ public class TestAMRMClient {
         Assert.assertNull(req.getNodeLabelExpression());
       }
     }
+    // set container with nodes and racks with labels
+    client.addContainerRequest(new ContainerRequest(
+        Resource.newInstance(1024, 1), new String[] { "rack1" },
+        new String[] { "node1", "node2" }, Priority.UNDEFINED, true, "y"));
+    for (ResourceRequest req : client.ask) {
+      if (ResourceRequest.ANY.equals(req.getResourceName())) {
+        Assert.assertEquals("y", req.getNodeLabelExpression());
+      } else {
+        Assert.assertNull(req.getNodeLabelExpression());
+      }
+    }
   }
   
   private void verifyAddRequestFailed(AMRMClient<ContainerRequest> client,
@@ -908,12 +922,15 @@ public class TestAMRMClient {
     amClient.removeContainerRequest(
         new ContainerRequest(capability, nodes, racks, priority));
     
-    int containersRequestedNode = amClient.remoteRequestsTable.get(priority)
-        .get(node).get(capability).remoteRequest.getNumContainers();
-    int containersRequestedRack = amClient.remoteRequestsTable.get(priority)
-        .get(rack).get(capability).remoteRequest.getNumContainers();
-    int containersRequestedAny = amClient.remoteRequestsTable.get(priority)
-    .get(ResourceRequest.ANY).get(capability).remoteRequest.getNumContainers();
+    int containersRequestedNode = amClient.remoteRequestsTable.get(priority,
+        node, ExecutionType.GUARANTEED, capability).remoteRequest
+        .getNumContainers();
+    int containersRequestedRack = amClient.remoteRequestsTable.get(priority,
+        rack, ExecutionType.GUARANTEED, capability).remoteRequest
+        .getNumContainers();
+    int containersRequestedAny = amClient.remoteRequestsTable.get(priority,
+        ResourceRequest.ANY, ExecutionType.GUARANTEED, capability)
+        .remoteRequest.getNumContainers();
 
     assertEquals(2, containersRequestedNode);
     assertEquals(2, containersRequestedRack);

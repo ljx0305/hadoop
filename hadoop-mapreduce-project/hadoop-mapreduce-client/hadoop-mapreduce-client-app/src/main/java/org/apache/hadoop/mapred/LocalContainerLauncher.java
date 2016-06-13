@@ -20,13 +20,16 @@ package org.apache.hadoop.mapred;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.RuntimeMXBean;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 
@@ -60,6 +63,7 @@ import org.apache.hadoop.service.AbstractService;
 import org.apache.hadoop.util.ExitUtil;
 import org.apache.hadoop.util.ShutdownHookManager;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.util.concurrent.HadoopExecutors;
 import org.apache.hadoop.yarn.api.ApplicationConstants.Environment;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
 
@@ -138,7 +142,7 @@ public class LocalContainerLauncher extends AbstractService implements
     // make it a daemon thread so that the process can exit even if the task is
     // not interruptible
     taskRunner =
-        Executors.newSingleThreadExecutor(new ThreadFactoryBuilder().
+        HadoopExecutors.newSingleThreadExecutor(new ThreadFactoryBuilder().
             setDaemon(true).setNameFormat("uber-SubtaskRunner").build());
     // create and start an event handling thread
     eventHandler = new Thread(new EventHandler(), "uber-EventHandler");
@@ -254,6 +258,30 @@ public class LocalContainerLauncher extends AbstractService implements
           futures.put(event.getTaskAttemptID(), future);
 
         } else if (event.getType() == EventType.CONTAINER_REMOTE_CLEANUP) {
+
+          if (event.getDumpContainerThreads()) {
+            try {
+              // Construct full thread dump header
+              System.out.println(new java.util.Date());
+              RuntimeMXBean rtBean = ManagementFactory.getRuntimeMXBean();
+              System.out.println("Full thread dump " + rtBean.getVmName()
+                  + " (" + rtBean.getVmVersion()
+                  + " " + rtBean.getSystemProperties().get("java.vm.info")
+                  + "):\n");
+              // Dump threads' states and stacks
+              ThreadMXBean tmxBean = ManagementFactory.getThreadMXBean();
+              ThreadInfo[] tInfos = tmxBean.dumpAllThreads(
+                  tmxBean.isObjectMonitorUsageSupported(),
+                  tmxBean.isSynchronizerUsageSupported());
+              for (ThreadInfo ti : tInfos) {
+                System.out.println(ti.toString());
+              }
+            } catch (Throwable t) {
+              // Failure to dump stack shouldn't cause method failure.
+              System.out.println("Could not create full thread dump: "
+                  + t.getMessage());
+            }
+          }
 
           // cancel (and interrupt) the current running task associated with the
           // event

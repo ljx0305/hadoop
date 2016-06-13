@@ -1194,11 +1194,13 @@ public class TestRMWebServicesApps extends JerseyTestBase {
       String type = exception.getString("exception");
       String classname = exception.getString("javaClassName");
       WebServicesTestUtils.checkStringMatch("exception message",
-          "For input string: \"invalid\"", message);
+          "java.lang.IllegalArgumentException: Invalid ApplicationId:"
+              + " application_invalid_12",
+          message);
       WebServicesTestUtils.checkStringMatch("exception type",
-          "NumberFormatException", type);
+          "BadRequestException", type);
       WebServicesTestUtils.checkStringMatch("exception classname",
-          "java.lang.NumberFormatException", classname);
+          "org.apache.hadoop.yarn.webapp.BadRequestException", classname);
 
     } finally {
       rm.stop();
@@ -1408,7 +1410,7 @@ public class TestRMWebServicesApps extends JerseyTestBase {
     assertEquals("clusterUsagePerc doesn't match", 50.0f, clusterUsagePerc, 0.01f);
     assertEquals("numContainers doesn't match", 1, numContainers);
     assertEquals("preemptedResourceMB doesn't match", app
-        .getRMAppMetrics().getResourcePreempted().getMemory(),
+        .getRMAppMetrics().getResourcePreempted().getMemorySize(),
         preemptedResourceMB);
     assertEquals("preemptedResourceVCores doesn't match", app
         .getRMAppMetrics().getResourcePreempted().getVirtualCores(),
@@ -1458,7 +1460,7 @@ public class TestRMWebServicesApps extends JerseyTestBase {
     while (true) {
       // fail the AM by sending CONTAINER_FINISHED event without registering.
       amNodeManager.nodeHeartbeat(am.getApplicationAttemptId(), 1, ContainerState.COMPLETE);
-      am.waitForState(RMAppAttemptState.FAILED);
+      rm.waitForState(am.getApplicationAttemptId(), RMAppAttemptState.FAILED);
       if (numAttempt == maxAppAttempts) {
         rm.waitForState(app1.getApplicationId(), RMAppState.FAILED);
         break;
@@ -1497,18 +1499,19 @@ public class TestRMWebServicesApps extends JerseyTestBase {
   }
 
   @Test
-  public void testInvalidAppAttempts() throws JSONException, Exception {
+  public void testInvalidAppIdGetAttempts() throws JSONException, Exception {
     rm.start();
     MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
-    rm.submitApp(CONTAINER_MB);
+    RMApp app = rm.submitApp(CONTAINER_MB);
     amNodeManager.nodeHeartbeat(true);
     WebResource r = resource();
 
     try {
       r.path("ws").path("v1").path("cluster").path("apps")
-          .path("application_invalid_12").accept(MediaType.APPLICATION_JSON)
+          .path("application_invalid_12").path("appattempts")
+          .accept(MediaType.APPLICATION_JSON)
           .get(JSONObject.class);
-      fail("should have thrown exception on invalid appid");
+      fail("should have thrown exception on invalid appAttempt");
     } catch (UniformInterfaceException ue) {
       ClientResponse response = ue.getResponse();
 
@@ -1521,11 +1524,52 @@ public class TestRMWebServicesApps extends JerseyTestBase {
       String type = exception.getString("exception");
       String classname = exception.getString("javaClassName");
       WebServicesTestUtils.checkStringMatch("exception message",
-          "For input string: \"invalid\"", message);
+          "java.lang.IllegalArgumentException: Invalid ApplicationId:"
+              + " application_invalid_12",
+          message);
       WebServicesTestUtils.checkStringMatch("exception type",
-          "NumberFormatException", type);
+          "BadRequestException", type);
       WebServicesTestUtils.checkStringMatch("exception classname",
-          "java.lang.NumberFormatException", classname);
+          "org.apache.hadoop.yarn.webapp.BadRequestException", classname);
+
+    } finally {
+      rm.stop();
+    }
+  }
+
+  @Test
+  public void testInvalidAppAttemptId() throws JSONException, Exception {
+    rm.start();
+    MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
+    RMApp app = rm.submitApp(CONTAINER_MB);
+    amNodeManager.nodeHeartbeat(true);
+    WebResource r = resource();
+
+    try {
+      r.path("ws").path("v1").path("cluster").path("apps")
+          .path(app.getApplicationId().toString()).path("appattempts")
+          .path("appattempt_invalid_12_000001")
+          .accept(MediaType.APPLICATION_JSON).get(JSONObject.class);
+      fail("should have thrown exception on invalid appAttempt");
+    } catch (UniformInterfaceException ue) {
+      ClientResponse response = ue.getResponse();
+
+      assertEquals(Status.BAD_REQUEST, response.getClientResponseStatus());
+      assertEquals(MediaType.APPLICATION_JSON_TYPE, response.getType());
+      JSONObject msg = response.getEntity(JSONObject.class);
+      JSONObject exception = msg.getJSONObject("RemoteException");
+      assertEquals("incorrect number of elements", 3, exception.length());
+      String message = exception.getString("message");
+      String type = exception.getString("exception");
+      String classname = exception.getString("javaClassName");
+      WebServicesTestUtils.checkStringMatch("exception message",
+          "java.lang.IllegalArgumentException: Invalid AppAttemptId:"
+              + " appattempt_invalid_12_000001",
+          message);
+      WebServicesTestUtils.checkStringMatch("exception type",
+          "BadRequestException", type);
+      WebServicesTestUtils.checkStringMatch("exception classname",
+          "org.apache.hadoop.yarn.webapp.BadRequestException", classname);
 
     } finally {
       rm.stop();
@@ -1643,7 +1687,7 @@ public class TestRMWebServicesApps extends JerseyTestBase {
       String user)
       throws JSONException, Exception {
 
-    assertEquals("incorrect number of elements", 9, info.length());
+    assertEquals("incorrect number of elements", 10, info.length());
 
     verifyAppAttemptInfoGeneric(appAttempt, info.getInt("id"),
         info.getLong("startTime"), info.getString("containerId"),

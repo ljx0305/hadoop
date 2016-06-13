@@ -25,6 +25,7 @@ import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.crypto.CryptoProtocolVersion;
 import org.apache.hadoop.fs.BatchedRemoteIterator.BatchedEntries;
+import org.apache.hadoop.hdfs.AddBlockFlag;
 import org.apache.hadoop.fs.CacheFlag;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.CreateFlag;
@@ -282,6 +283,19 @@ public interface ClientProtocol {
       throws IOException;
 
   /**
+   * Unset the storage policy set for a given file or directory.
+   * @param src Path of an existing file/directory.
+   * @throws SnapshotAccessControlException If access is denied
+   * @throws org.apache.hadoop.fs.UnresolvedLinkException if <code>src</code>
+   *           contains a symlink
+   * @throws java.io.FileNotFoundException If file/dir <code>src</code> is not
+   *           found
+   * @throws QuotaExceededException If changes violate the quota restriction
+   */
+  @Idempotent
+  void unsetStoragePolicy(String src) throws IOException;
+
+  /**
    * Get the storage policy for a file/directory.
    * @param path
    *          Path of an existing file/directory.
@@ -377,6 +391,8 @@ public interface ClientProtocol {
    * @param fileId the id uniquely identifying a file
    * @param favoredNodes the list of nodes where the client wants the blocks.
    *          Nodes are identified by either host name or address.
+   * @param addBlockFlags flags to advise the behavior of allocating and placing
+   *                      a new block.
    *
    * @return LocatedBlock allocated block information.
    *
@@ -395,7 +411,7 @@ public interface ClientProtocol {
   @Idempotent
   LocatedBlock addBlock(String src, String clientName,
       ExtendedBlock previous, DatanodeInfo[] excludeNodes, long fileId,
-      String[] favoredNodes)
+      String[] favoredNodes, EnumSet<AddBlockFlag> addBlockFlags)
       throws IOException;
 
   /**

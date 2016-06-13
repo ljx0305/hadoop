@@ -27,7 +27,7 @@ import static org.mockito.Mockito.verify;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.event.AsyncDispatcher;
-import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager.SchedulerEventDispatcher;
+import org.apache.hadoop.yarn.event.EventDispatcher;
 import org.apache.hadoop.yarn.server.resourcemanager.rmcontainer.RMContainer;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.event.ContainerPreemptEvent;
@@ -44,8 +44,8 @@ public class TestRMDispatcher {
     AsyncDispatcher rmDispatcher = new AsyncDispatcher();
     CapacityScheduler sched = spy(new CapacityScheduler());
     YarnConfiguration conf = new YarnConfiguration();
-    SchedulerEventDispatcher schedulerDispatcher =
-        new SchedulerEventDispatcher(sched);
+    EventDispatcher schedulerDispatcher =
+        new EventDispatcher(sched, sched.getClass().getName());
     rmDispatcher.register(SchedulerEventType.class, schedulerDispatcher);
     rmDispatcher.init(conf);
     rmDispatcher.start();
@@ -59,7 +59,7 @@ public class TestRMDispatcher {
       rmDispatcher.getEventHandler().handle(event1);
       ContainerPreemptEvent event2 =
           new ContainerPreemptEvent(appAttemptId, container,
-            SchedulerEventType.KILL_PREEMPTED_CONTAINER);
+            SchedulerEventType.MARK_CONTAINER_FOR_KILLABLE);
       rmDispatcher.getEventHandler().handle(event2);
       ContainerPreemptEvent event3 =
           new ContainerPreemptEvent(appAttemptId, container,
@@ -70,7 +70,7 @@ public class TestRMDispatcher {
       verify(sched, times(3)).handle(any(SchedulerEvent.class));
       verify(sched).killReservedContainer(container);
       verify(sched).markContainerForPreemption(appAttemptId, container);
-      verify(sched).killPreemptedContainer(container);
+      verify(sched).markContainerForKillable(container);
     } catch (InterruptedException e) {
       Assert.fail();
     } finally {

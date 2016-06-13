@@ -133,7 +133,7 @@ public final class HdfsConstants {
       }
     }
 
-    /** Covert the given String to a RollingUpgradeAction. */
+    /** Convert the given String to a RollingUpgradeAction. */
     public static RollingUpgradeAction fromString(String s) {
       return MAP.get(StringUtils.toUpperCase(s));
     }
@@ -143,6 +143,10 @@ public final class HdfsConstants {
   public enum DatanodeReportType {
     ALL, LIVE, DEAD, DECOMMISSIONING
   }
+
+  public static final byte RS_6_3_POLICY_ID = 0;
+  public static final byte RS_3_2_POLICY_ID = 1;
+  public static final byte RS_6_3_LEGACY_POLICY_ID = 2;
 
   /* Hidden constructor */
   protected HdfsConstants() {

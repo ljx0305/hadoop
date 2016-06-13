@@ -23,9 +23,12 @@ import static org.apache.hadoop.yarn.webapp.view.JQueryUI._INFO_WRAP;
 import static org.apache.hadoop.yarn.webapp.view.JQueryUI._ODD;
 import static org.apache.hadoop.yarn.webapp.view.JQueryUI._TH;
 
+import java.util.Collection;
+import java.util.List;
+
+import org.apache.commons.lang.StringEscapeUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptReport;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.ContainerReport;
@@ -36,8 +39,6 @@ import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttempt;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttemptMetrics;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.AbstractYarnScheduler;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerApplicationAttempt;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.AppInfo;
 import org.apache.hadoop.yarn.server.webapp.AppAttemptBlock;
 import org.apache.hadoop.yarn.server.webapp.dao.AppAttemptInfo;
@@ -46,13 +47,11 @@ import org.apache.hadoop.yarn.util.resource.Resources;
 import org.apache.hadoop.yarn.webapp.hamlet.Hamlet;
 import org.apache.hadoop.yarn.webapp.hamlet.Hamlet.DIV;
 import org.apache.hadoop.yarn.webapp.hamlet.Hamlet.TABLE;
+import org.apache.hadoop.yarn.webapp.hamlet.Hamlet.TBODY;
 import org.apache.hadoop.yarn.webapp.util.WebAppUtils;
 import org.apache.hadoop.yarn.webapp.view.InfoBlock;
-import com.google.inject.Inject;
-import java.util.List;
 
-import java.util.Collection;
-import java.util.Set;
+import com.google.inject.Inject;
 
 public class RMAppAttemptBlock extends AppAttemptBlock{
 
@@ -78,35 +77,44 @@ public class RMAppAttemptBlock extends AppAttemptBlock{
     }
 
     DIV<Hamlet> div = html.div(_INFO_WRAP);
-    TABLE<DIV<Hamlet>> table =
-        div.h3("Total Outstanding Resource Requests: "
-          + getTotalResource(resourceRequests)).table(
-              "#ResourceRequests");
+    // Requests Table
+    TBODY<TABLE<DIV<Hamlet>>> tbody = div
+        .h3("Total Outstanding Resource Requests: "
+            + getTotalResource(resourceRequests))
+        .table("#resourceRequests").thead().tr().th(".priority", "Priority")
+        .th(".resource", "ResourceName").th(".capacity", "Capability")
+        .th(".containers", "NumContainers")
+        .th(".relaxlocality", "RelaxLocality")
+        .th(".labelexpression", "NodeLabelExpression")._()._().tbody();
 
-    table.tr().
-      th(_TH, "Priority").
-      th(_TH, "ResourceName").
-      th(_TH, "Capability").
-      th(_TH, "NumContainers").
-      th(_TH, "RelaxLocality").
-      th(_TH, "NodeLabelExpression").
-    _();
-
-    boolean odd = false;
-    for (ResourceRequest request : resourceRequests) {
-      if (request.getNumContainers() == 0) {
+    StringBuilder resourceRequestTableData = new StringBuilder("[\n");
+    for (ResourceRequest resourceRequest : resourceRequests) {
+      if (resourceRequest.getNumContainers() == 0) {
         continue;
       }
-      table.tr((odd = !odd) ? _ODD : _EVEN)
-        .td(String.valueOf(request.getPriority()))
-        .td(request.getResourceName())
-        .td(String.valueOf(request.getCapability()))
-        .td(String.valueOf(request.getNumContainers()))
-        .td(String.valueOf(request.getRelaxLocality()))
-        .td(request.getNodeLabelExpression() == null ? "N/A" : request
-            .getNodeLabelExpression())._();
+      resourceRequestTableData.append("[\"")
+          .append(String.valueOf(resourceRequest.getPriority())).append("\",\"")
+          .append(resourceRequest.getResourceName()).append("\",\"")
+          .append(StringEscapeUtils.escapeJavaScript(StringEscapeUtils
+              .escapeHtml(String.valueOf(resourceRequest.getCapability()))))
+          .append("\",\"")
+          .append(String.valueOf(resourceRequest.getNumContainers()))
+          .append("\",\"")
+          .append(String.valueOf(resourceRequest.getRelaxLocality()))
+          .append("\",\"")
+          .append(resourceRequest.getNodeLabelExpression() == null ? "N/A"
+              : resourceRequest.getNodeLabelExpression())
+          .append("\"],\n");
     }
-    table._();
+    if (resourceRequestTableData
+        .charAt(resourceRequestTableData.length() - 2) == ',') {
+      resourceRequestTableData.delete(resourceRequestTableData.length() - 2,
+          resourceRequestTableData.length() - 1);
+    }
+    resourceRequestTableData.append("]");
+    html.script().$type("text/javascript")
+        ._("var resourceRequestsTableData=" + resourceRequestTableData)._();
+    tbody._()._();
     div._();
   }
 
@@ -207,14 +215,14 @@ public class RMAppAttemptBlock extends AppAttemptBlock{
       Collection<ContainerReport> containers, AppAttemptInfo appAttempt,
       String node) {
 
-    String blacklistedNodes = "-";
-    Set<String> nodes =
-        getBlacklistedNodes(rm, getRMAppAttempt().getAppAttemptId());
-    if (nodes != null) {
-      if (!nodes.isEmpty()) {
-        blacklistedNodes = StringUtils.join(nodes, ", ");
-      }
-    }
+    RMAppAttempt rmAppAttempt = getRMAppAttempt();
+    // nodes which are blacklisted by the application
+    String appBlacklistedNodes =
+        getNodeString(rmAppAttempt.getBlacklistedNodes());
+    // nodes which are blacklisted by the RM for AM launches
+    String rmBlackListedNodes =
+        getNodeString(rmAppAttempt.getAMBlacklistManager()
+          .getBlacklistUpdates().getBlacklistAdditions());
 
     info("Application Attempt Overview")
       ._(
@@ -248,21 +256,17 @@ public class RMAppAttemptBlock extends AppAttemptBlock{
       ._(
         "Diagnostics Info:",
         appAttempt.getDiagnosticsInfo() == null ? "" : appAttempt
-          .getDiagnosticsInfo())._("Blacklisted Nodes:", blacklistedNodes);
+          .getDiagnosticsInfo())
+      ._("Nodes blacklisted by the application:", appBlacklistedNodes)
+      ._("Nodes blacklisted by the system:", rmBlackListedNodes);
   }
 
-  public static Set<String> getBlacklistedNodes(ResourceManager rm,
-      ApplicationAttemptId appid) {
-    if (rm.getResourceScheduler() instanceof AbstractYarnScheduler) {
-      AbstractYarnScheduler ayScheduler =
-          (AbstractYarnScheduler) rm.getResourceScheduler();
-      SchedulerApplicationAttempt attempt =
-          ayScheduler.getApplicationAttempt(appid);
-      if (attempt != null) {
-        return attempt.getBlacklistedNodes();
-      }
+  private String getNodeString(Collection<String> nodes) {
+    String concatinatedString = "-";
+    if (null != nodes && !nodes.isEmpty()) {
+      concatinatedString = StringUtils.join(nodes, ", ");
     }
-    return null;
+    return concatinatedString;
   }
 
   @Override

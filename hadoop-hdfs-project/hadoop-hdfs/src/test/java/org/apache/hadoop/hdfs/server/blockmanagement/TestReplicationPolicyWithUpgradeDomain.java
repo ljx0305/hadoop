@@ -187,7 +187,7 @@ public class TestReplicationPolicyWithUpgradeDomain
     chosenNodes.add(storages[2]);
     targets = replicator.chooseTarget(filename, 1, dataNodes[0], chosenNodes,
         true, excludedNodes, BLOCK_SIZE,
-        TestBlockStoragePolicy.DEFAULT_STORAGE_POLICY);
+        TestBlockStoragePolicy.DEFAULT_STORAGE_POLICY, null);
     System.out.println("targets=" + Arrays.asList(targets));
     assertEquals(2, targets.length);
   }
@@ -330,7 +330,7 @@ public class TestReplicationPolicyWithUpgradeDomain
     DatanodeDescriptor delHintNode = storages[0].getDatanodeDescriptor();
     List<StorageType> excessTypes = storagePolicy.chooseExcess((short) 3,
         DatanodeStorageInfo.toStorageTypes(nonExcess));
-    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, 3,
+    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, nonExcess, 3,
         excessTypes, storages[3].getDatanodeDescriptor(), delHintNode);
     assertTrue(excessReplicas.size() == 1);
     assertTrue(excessReplicas.contains(storages[0]));
@@ -340,7 +340,7 @@ public class TestReplicationPolicyWithUpgradeDomain
     delHintNode = storages[1].getDatanodeDescriptor();
     excessTypes = storagePolicy.chooseExcess((short) 3,
         DatanodeStorageInfo.toStorageTypes(nonExcess));
-    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, 3,
+    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, nonExcess, 3,
         excessTypes, storages[3].getDatanodeDescriptor(), delHintNode);
     assertTrue(excessReplicas.size() == 1);
     assertTrue(excessReplicas.contains(storages[0]));
@@ -353,7 +353,7 @@ public class TestReplicationPolicyWithUpgradeDomain
     nonExcess.add(storages[8]);
     excessTypes = storagePolicy.chooseExcess((short) 3,
         DatanodeStorageInfo.toStorageTypes(nonExcess));
-    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, 3,
+    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, nonExcess, 3,
         excessTypes, storages[8].getDatanodeDescriptor(), null);
     assertTrue(excessReplicas.size() == 1);
     assertTrue(excessReplicas.contains(storages[1]));
@@ -366,7 +366,7 @@ public class TestReplicationPolicyWithUpgradeDomain
     nonExcess.add(storages[5]);
     excessTypes = storagePolicy.chooseExcess((short) 3,
         DatanodeStorageInfo.toStorageTypes(nonExcess));
-    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, 3,
+    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, nonExcess, 3,
         excessTypes, storages[8].getDatanodeDescriptor(), null);
     assertTrue(excessReplicas.size() == 1);
     assertTrue(excessReplicas.contains(storages[1]) ||
@@ -384,7 +384,7 @@ public class TestReplicationPolicyWithUpgradeDomain
     nonExcess.add(excessStorage);
     excessTypes = storagePolicy.chooseExcess((short) 3,
         DatanodeStorageInfo.toStorageTypes(nonExcess));
-    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, 3,
+    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, nonExcess, 3,
         excessTypes, storages[3].getDatanodeDescriptor(), null);
     assertTrue(excessReplicas.size() == 2);
     assertTrue(excessReplicas.contains(storages[0]));
@@ -416,7 +416,7 @@ public class TestReplicationPolicyWithUpgradeDomain
     nonExcess.add(storages[8]);
     excessTypes = storagePolicy.chooseExcess((short) 3,
         DatanodeStorageInfo.toStorageTypes(nonExcess));
-    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, 3,
+    excessReplicas = replicator.chooseReplicasToDelete(nonExcess, nonExcess, 3,
         excessTypes, storages[3].getDatanodeDescriptor(),
         storages[7].getDatanodeDescriptor());
     assertEquals(1, excessReplicas.size());

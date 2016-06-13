@@ -19,11 +19,10 @@ package org.apache.hadoop.hdfs.server.blockmanagement;
 
 import org.apache.hadoop.net.Node;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
-class ReplicationWork extends BlockRecoveryWork {
+class ReplicationWork extends BlockReconstructionWork {
   public ReplicationWork(BlockInfo block, BlockCollection bc,
       DatanodeDescriptor[] srcNodes, List<DatanodeDescriptor> containingNodes,
       List<DatanodeStorageInfo> liveReplicaStorages, int additionalReplRequired,
@@ -33,7 +32,8 @@ class ReplicationWork extends BlockRecoveryWork {
     assert getSrcNodes().length == 1 :
         "There should be exactly 1 source node that have been selected";
     getSrcNodes()[0].incrementPendingReplicationWithoutTargets();
-    BlockManager.LOG.debug("Creating a ReplicationWork to recover " + block);
+    BlockManager.LOG
+        .debug("Creating a ReplicationWork to reconstruct " + block);
   }
 
   @Override
@@ -47,10 +47,16 @@ class ReplicationWork extends BlockRecoveryWork {
           getBc().getName(), getAdditionalReplRequired(), getSrcNodes()[0],
           getLiveReplicaStorages(), false, excludedNodes,
           getBlock().getNumBytes(),
-          storagePolicySuite.getPolicy(getBc().getStoragePolicyID()));
+          storagePolicySuite.getPolicy(getBc().getStoragePolicyID()),
+          null);
       setTargets(chosenTargets);
     } finally {
       getSrcNodes()[0].decrementPendingReplicationWithoutTargets();
     }
+  }
+
+  @Override
+  void addTaskToDatanode(NumberReplicas numberReplicas) {
+    getSrcNodes()[0].addBlockToBeReplicated(getBlock(), getTargets());
   }
 }

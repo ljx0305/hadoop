@@ -45,29 +45,27 @@ import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.AccessControlList;
 import org.apache.hadoop.security.authorize.ProxyUsers;
 import org.apache.hadoop.security.authorize.ServiceAuthorizationManager;
-import org.apache.hadoop.yarn.LocalConfigurationProvider;
 import org.apache.hadoop.yarn.api.records.DecommissionType;
 import org.apache.hadoop.yarn.api.records.NodeId;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.conf.HAUtil;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshAdminAclsRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshClusterMaxPriorityRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshNodesRequest;
+import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshNodesResourcesRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshQueuesRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshServiceAclsRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshSuperUserGroupsConfigurationRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshUserToGroupsMappingsRequest;
-import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshNodesResourcesRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RemoveFromClusterNodeLabelsRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.ReplaceLabelsOnNodeRequest;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.resource.DynamicResourceConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNode;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
-import org.apache.hadoop.yarn.server.resourcemanager.resource.DynamicResourceConfiguration;
-import org.apache.hadoop.yarn.api.records.NodeId;
-import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.util.ConverterUtils;
 import org.junit.After;
 import org.junit.Assert;
@@ -177,7 +175,33 @@ public class TestRMAdminService {
   }
 
   @Test
-  public void testAdminRefreshNodesResourcesWithFileSystemBasedConfigurationProvider()
+  public void testAdminRefreshNodesWithoutConfiguration()
+      throws IOException, YarnException {
+    configuration.set(YarnConfiguration.RM_CONFIGURATION_PROVIDER_CLASS,
+        "org.apache.hadoop.yarn.FileSystemBasedConfigurationProvider");
+
+    // upload default configurations
+    uploadDefaultConfiguration();
+
+    try {
+      rm = new MockRM(configuration);
+      rm.init(configuration);
+      rm.start();
+    } catch (Exception ex) {
+      fail("Should not get any exceptions");
+    }
+
+    try {
+      rm.adminService
+          .refreshNodesResources(RefreshNodesResourcesRequest.newInstance());
+    } catch (Exception ex) {
+      fail("Should not get any exceptions even when no configurations "
+          + "are done for node resources refresh");
+    }
+  }
+
+  @Test
+  public void testRefreshNodesResourceWithFileSystemBasedConfigurationProvider()
       throws IOException, YarnException {
     configuration.set(YarnConfiguration.RM_CONFIGURATION_PROVIDER_CLASS,
         "org.apache.hadoop.yarn.FileSystemBasedConfigurationProvider");
@@ -212,6 +236,174 @@ public class TestRMAdminService {
     RMNode niAfter = rm.getRMContext().getRMNodes().get(nid);
     Resource resourceAfter = niAfter.getTotalCapability();
     Assert.assertEquals("<memory:4096, vCores:4>", resourceAfter.toString());
+  }
+
+  @Test
+  public void testRefreshNodesResourceWithResourceReturnInRegistration()
+      throws IOException, YarnException {
+    configuration.set(YarnConfiguration.RM_CONFIGURATION_PROVIDER_CLASS,
+        "org.apache.hadoop.yarn.FileSystemBasedConfigurationProvider");
+
+    //upload default configurations
+    uploadDefaultConfiguration();
+
+    MockNM nm = null;
+    try {
+      rm = new MockRM(configuration);
+      rm.init(configuration);
+      rm.start();
+      nm = rm.registerNode("h1:1234", 2048, 2);
+    } catch(Exception ex) {
+      fail("Should not get any exceptions");
+    }
+
+    NodeId nid = ConverterUtils.toNodeId("h1:1234");
+    RMNode ni = rm.getRMContext().getRMNodes().get(nid);
+    Resource resource = ni.getTotalCapability();
+    Assert.assertEquals("<memory:2048, vCores:2>", resource.toString());
+
+    DynamicResourceConfiguration drConf =
+        new DynamicResourceConfiguration();
+    drConf.set("yarn.resource.dynamic.nodes", "h1:1234");
+    drConf.set("yarn.resource.dynamic.h1:1234.vcores", "4");
+    drConf.set("yarn.resource.dynamic.h1:1234.memory", "4096");
+    uploadConfiguration(drConf, "dynamic-resources.xml");
+
+    rm.adminService.refreshNodesResources(
+        RefreshNodesResourcesRequest.newInstance());
+
+    try {
+      // register the same node again with original resource.
+      // validate this will get new resource back;
+      nm.registerNode();
+    } catch (Exception ex) {
+      fail("Should not get any exceptions");
+    }
+
+    RMNode niAfter = rm.getRMContext().getRMNodes().get(nid);
+    Resource resourceAfter = niAfter.getTotalCapability();
+    Assert.assertEquals("<memory:4096, vCores:4>", resourceAfter.toString());
+
+    Assert.assertEquals(4096, nm.getMemory());
+    Assert.assertEquals(4, nm.getvCores());
+  }
+
+  @Test
+  public void testRefreshNodesResourceWithResourceReturnInHeartbeat()
+      throws IOException, YarnException {
+    configuration.set(YarnConfiguration.RM_CONFIGURATION_PROVIDER_CLASS,
+        "org.apache.hadoop.yarn.FileSystemBasedConfigurationProvider");
+
+    //upload default configurations
+    uploadDefaultConfiguration();
+
+    MockNM nm = null;
+    try {
+      rm = new MockRM(configuration);
+      rm.init(configuration);
+      rm.start();
+      nm = rm.registerNode("h1:1234", 2048, 2);
+    } catch(Exception ex) {
+      fail("Should not get any exceptions");
+    }
+
+    NodeId nid = ConverterUtils.toNodeId("h1:1234");
+    RMNode ni = rm.getRMContext().getRMNodes().get(nid);
+    Resource resource = ni.getTotalCapability();
+    Assert.assertEquals("<memory:2048, vCores:2>", resource.toString());
+
+    DynamicResourceConfiguration drConf =
+        new DynamicResourceConfiguration();
+    drConf.set("yarn.resource.dynamic.nodes", "h1:1234");
+    drConf.set("yarn.resource.dynamic.h1:1234.vcores", "4");
+    drConf.set("yarn.resource.dynamic.h1:1234.memory", "4096");
+    uploadConfiguration(drConf, "dynamic-resources.xml");
+
+    rm.adminService.refreshNodesResources(
+        RefreshNodesResourcesRequest.newInstance());
+
+    try {
+      // NM-RM heartbeat, validate that this will get new resource back.
+      nm.nodeHeartbeat(true);
+    } catch (Exception ex) {
+      fail("Should not get any exceptions");
+    }
+
+    RMNode niAfter = rm.getRMContext().getRMNodes().get(nid);
+    Resource resourceAfter = niAfter.getTotalCapability();
+    Assert.assertEquals("<memory:4096, vCores:4>", resourceAfter.toString());
+
+    Assert.assertEquals(4096, nm.getMemory());
+    Assert.assertEquals(4, nm.getvCores());
+  }
+
+  @Test
+  public void testResourcePersistentForNMRegistrationWithNewResource()
+      throws IOException, YarnException {
+    configuration.set(YarnConfiguration.RM_CONFIGURATION_PROVIDER_CLASS,
+        "org.apache.hadoop.yarn.FileSystemBasedConfigurationProvider");
+
+    //upload default configurations
+    uploadDefaultConfiguration();
+
+    try {
+      rm = new MockRM(configuration);
+      rm.init(configuration);
+      rm.start();
+      rm.registerNode("h1:1234", 5120);
+    } catch(Exception ex) {
+      fail("Should not get any exceptions");
+    }
+
+    NodeId nid = ConverterUtils.toNodeId("h1:1234");
+    RMNode ni = rm.getRMContext().getRMNodes().get(nid);
+    Resource resource = ni.getTotalCapability();
+    Assert.assertEquals("<memory:5120, vCores:5>", resource.toString());
+
+    DynamicResourceConfiguration drConf =
+        new DynamicResourceConfiguration();
+    drConf.set("yarn.resource.dynamic.nodes", "h1:1234");
+    drConf.set("yarn.resource.dynamic.h1:1234.vcores", "4");
+    drConf.set("yarn.resource.dynamic.h1:1234.memory", "4096");
+    uploadConfiguration(drConf, "dynamic-resources.xml");
+
+    rm.adminService.refreshNodesResources(
+        RefreshNodesResourcesRequest.newInstance());
+
+    try {
+      // register the same node again with a different resource.
+      // validate this won't work as resource cached in RM side.
+      rm.registerNode("h1:1234", 8192, 8);
+    } catch (Exception ex) {
+      fail("Should not get any exceptions");
+    }
+
+    RMNode niAfter = rm.getRMContext().getRMNodes().get(nid);
+    Resource resourceAfter = niAfter.getTotalCapability();
+    Assert.assertEquals("<memory:4096, vCores:4>", resourceAfter.toString());
+
+    // Replace original dr file with an empty dr file, and validate node
+    // registration with new resources will take effective now.
+    deleteOnRemoteFileSystem("dynamic-resources.xml");
+    DynamicResourceConfiguration emptyDRConf =
+        new DynamicResourceConfiguration();
+
+    uploadConfiguration(emptyDRConf, "dynamic-resources.xml");
+    rm.adminService.refreshNodesResources(
+        RefreshNodesResourcesRequest.newInstance());
+    try {
+      // register the same node third time, this time the register resource
+      // should work.
+      rm.registerNode("h1:1234", 8192, 8);
+    } catch (Exception ex) {
+      fail("Should not get any exceptions");
+    }
+
+    niAfter = rm.getRMContext().getRMNodes().get(nid);
+    resourceAfter = niAfter.getTotalCapability();
+    // new resource in registration should take effective as we empty
+    // dynamic resource file already.
+    Assert.assertEquals("<memory:8192, vCores:8>", resourceAfter.toString());
   }
 
   @Test
@@ -979,6 +1171,11 @@ public class TestRMAdminService {
     String csConfFile = writeConfigurationXML(conf, confFileName);
     // upload the file into Remote File System
     uploadToRemoteFileSystem(new Path(csConfFile));
+  }
+
+  private void deleteOnRemoteFileSystem(String fileName)
+      throws IOException {
+    fs.delete(new Path(workingPath, fileName));
   }
 
   private void uploadDefaultConfiguration() throws IOException {

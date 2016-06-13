@@ -87,7 +87,7 @@ public class TestNMWebServer {
 
   private int startNMWebAppServer(String webAddr) {
     Context nmContext = new NodeManager.NMContext(null, null, null, null,
-        null);
+        null, false);
     ResourceView resourceView = new ResourceView() {
       @Override
       public long getVmemAllocatedForContainers() {
@@ -150,7 +150,7 @@ public class TestNMWebServer {
   @Test
   public void testNMWebApp() throws IOException, YarnException {
     Context nmContext = new NodeManager.NMContext(null, null, null, null,
-        null);
+        null, false);
     ResourceView resourceView = new ResourceView() {
       @Override
       public long getVmemAllocatedForContainers() {
@@ -215,10 +215,11 @@ public class TestNMWebServer {
           BuilderUtils.newContainerToken(containerId, "127.0.0.1", 1234, user,
             BuilderUtils.newResource(1024, 1), currentTime + 10000L, 123,
             "password".getBytes(), currentTime);
+      Context context = mock(Context.class);
       Container container =
-          new ContainerImpl(conf, dispatcher, stateStore, launchContext,
+          new ContainerImpl(conf, dispatcher, launchContext,
             null, metrics,
-            BuilderUtils.newContainerTokenIdentifier(containerToken)) {
+            BuilderUtils.newContainerTokenIdentifier(containerToken), context) {
 
             @Override
             public ContainerState getContainerState() {

@@ -43,7 +43,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.StorageType;
 import org.apache.hadoop.fs.UnresolvedLinkException;
 import org.apache.hadoop.hdfs.BlockReader;
-import org.apache.hadoop.hdfs.BlockReaderFactory;
+import org.apache.hadoop.hdfs.client.impl.BlockReaderFactory;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
 import org.apache.hadoop.hdfs.DFSUtilClient;
@@ -73,7 +73,6 @@ import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeDescriptor;
 import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeStorageInfo;
 import org.apache.hadoop.hdfs.server.blockmanagement.NumberReplicas;
 import org.apache.hadoop.hdfs.server.datanode.CachingStrategy;
-import org.apache.hadoop.hdfs.util.LightWeightHashSet;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.NodeBase;
@@ -265,7 +264,7 @@ public class NamenodeFsck implements DataEncryptionKeyFactory {
       out.println("Block Id: " + blockId);
       out.println("Block belongs to: "+iNode.getFullPathName());
       out.println("No. of Expected Replica: " +
-          blockManager.getExpectedReplicaNum(blockInfo));
+          blockManager.getExpectedRedundancyNum(blockInfo));
       out.println("No. of live Replica: " + numberReplicas.liveReplicas());
       out.println("No. of excess Replica: " + numberReplicas.excessReplicas());
       out.println("No. of stale Replica: " +
@@ -570,8 +569,6 @@ public class NamenodeFsck implements DataEncryptionKeyFactory {
             storage.getStorageType()));
       }
       if (showReplicaDetails) {
-        LightWeightHashSet<BlockInfo> blocksExcess =
-            blockManager.excessReplicateMap.get(dnDesc.getDatanodeUuid());
         Collection<DatanodeDescriptor> corruptReplicas =
             blockManager.getCorruptReplicas(storedBlock);
         sb.append("(");
@@ -582,8 +579,7 @@ public class NamenodeFsck implements DataEncryptionKeyFactory {
         } else if (corruptReplicas != null
             && corruptReplicas.contains(dnDesc)) {
           sb.append("CORRUPT)");
-        } else if (blocksExcess != null
-            && blocksExcess.contains(storedBlock)) {
+        } else if (blockManager.isExcess(dnDesc, storedBlock)) {
           sb.append("EXCESS)");
         } else if (dnDesc.isStale(this.staleInterval)) {
           sb.append("STALE_NODE)");
@@ -935,14 +931,14 @@ public class NamenodeFsck implements DataEncryptionKeyFactory {
             setBlock(block).
             setBlockToken(lblock.getBlockToken()).
             setStartOffset(0).
-            setLength(-1).
+            setLength(block.getNumBytes()).
             setVerifyChecksum(true).
             setClientName("fsck").
             setDatanodeInfo(chosenNode).
             setInetSocketAddress(targetAddr).
             setCachingStrategy(CachingStrategy.newDropBehind()).
             setClientCacheContext(dfs.getClientContext()).
-            setConfiguration(namenode.conf).
+            setConfiguration(namenode.getConf()).
             setTracer(tracer).
             setRemotePeerFactory(new RemotePeerFactory() {
               @Override
@@ -956,7 +952,7 @@ public class NamenodeFsck implements DataEncryptionKeyFactory {
                   s.setSoTimeout(HdfsConstants.READ_TIMEOUT);
                   peer = DFSUtilClient.peerFromSocketAndKey(
                         dfs.getSaslDataTransferClient(), s, NamenodeFsck.this,
-                        blockToken, datanodeId);
+                        blockToken, datanodeId, HdfsConstants.READ_TIMEOUT);
                 } finally {
                   if (peer == null) {
                     IOUtils.closeQuietly(s);

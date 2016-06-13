@@ -27,6 +27,7 @@ import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.hadoop.yarn.api.records.Resource;
 
 /** 
  * Manages ResourceManager audit logs. 
@@ -38,7 +39,7 @@ public class RMAuditLogger {
 
   static enum Keys {USER, OPERATION, TARGET, RESULT, IP, PERMISSIONS,
                     DESCRIPTION, APPID, APPATTEMPTID, CONTAINERID, 
-                    CALLERCONTEXT, CALLERSIGNATURE}
+                    CALLERCONTEXT, CALLERSIGNATURE, RESOURCE}
 
   public static class AuditConstants {
     static final String SUCCESS = "SUCCESS";
@@ -68,16 +69,20 @@ public class RMAuditLogger {
     public static final String UNAUTHORIZED_USER = "Unauthorized user";
     
     // For Reservation system
+    public static final String CREATE_NEW_RESERVATION_REQUEST = "Create " +
+        "Reservation Request";
     public static final String SUBMIT_RESERVATION_REQUEST = "Submit Reservation Request";
     public static final String UPDATE_RESERVATION_REQUEST = "Update Reservation Request";
     public static final String DELETE_RESERVATION_REQUEST = "Delete Reservation Request";
+    public static final String LIST_RESERVATION_REQUEST = "List " +
+            "Reservation Request";
   }
   
   static String createSuccessLog(String user, String operation, String target,
       ApplicationId appId, ApplicationAttemptId attemptId,
-      ContainerId containerId) {
+      ContainerId containerId, Resource resource) {
     return createSuccessLog(user, operation, target, appId, attemptId,
-        containerId, null);
+        containerId, resource, null);
   }
 
   /**
@@ -85,7 +90,7 @@ public class RMAuditLogger {
    */
   static String createSuccessLog(String user, String operation, String target,
       ApplicationId appId, ApplicationAttemptId attemptId,
-      ContainerId containerId, CallerContext callerContext) {
+      ContainerId containerId, Resource resource, CallerContext callerContext) {
     StringBuilder b = new StringBuilder();
     start(Keys.USER, user, b);
     addRemoteIP(b);
@@ -100,6 +105,9 @@ public class RMAuditLogger {
     }
     if (containerId != null) {
       add(Keys.CONTAINERID, containerId.toString(), b);
+    }
+    if (resource != null) {
+      add(Keys.RESOURCE, resource.toString(), b);
     }
     appendCallerContext(b, callerContext);
     return b.toString();
@@ -136,16 +144,17 @@ public class RMAuditLogger {
    * @param target The target on which the operation is being performed. 
    * @param appId Application Id in which operation was performed.
    * @param containerId Container Id in which operation was performed.
+   * @param resource Resource associated with container.
    *
    * <br><br>
    * Note that the {@link RMAuditLogger} uses tabs ('\t') as a key-val delimiter
    * and hence the value fields should not contains tabs ('\t').
    */
   public static void logSuccess(String user, String operation, String target, 
-      ApplicationId appId, ContainerId containerId) {
+      ApplicationId appId, ContainerId containerId, Resource resource) {
     if (LOG.isInfoEnabled()) {
       LOG.info(createSuccessLog(user, operation, target, appId, null, 
-          containerId));
+          containerId, resource));
     }
   }
 
@@ -166,7 +175,7 @@ public class RMAuditLogger {
       ApplicationId appId, ApplicationAttemptId attemptId) {
     if (LOG.isInfoEnabled()) {
       LOG.info(createSuccessLog(user, operation, target, appId, attemptId,
-          null));
+          null, null));
     }
   }
   
@@ -174,7 +183,7 @@ public class RMAuditLogger {
       ApplicationId appId, CallerContext callerContext) {
     if (LOG.isInfoEnabled()) {
       LOG.info(createSuccessLog(user, operation, target, appId, null, null,
-          callerContext));
+          null, callerContext));
     }
   }
 
@@ -194,7 +203,7 @@ public class RMAuditLogger {
   public static void logSuccess(String user, String operation, String target,
       ApplicationId appId) {
     if (LOG.isInfoEnabled()) {
-      LOG.info(createSuccessLog(user, operation, target, appId, null, null));
+      LOG.info(createSuccessLog(user, operation, target, appId, null, null, null));
     }
   }
 
@@ -211,14 +220,14 @@ public class RMAuditLogger {
    */
   public static void logSuccess(String user, String operation, String target) {
     if (LOG.isInfoEnabled()) {
-      LOG.info(createSuccessLog(user, operation, target, null, null, null));
+      LOG.info(createSuccessLog(user, operation, target, null, null, null, null));
     }
   }
   
   static String createFailureLog(String user, String operation, String perm,
       String target, String description, ApplicationId appId,
       ApplicationAttemptId attemptId, ContainerId containerId,
-      CallerContext callerContext) {
+      Resource resource, CallerContext callerContext) {
     StringBuilder b = new StringBuilder();
     start(Keys.USER, user, b);
     addRemoteIP(b);
@@ -236,6 +245,9 @@ public class RMAuditLogger {
     if (containerId != null) {
       add(Keys.CONTAINERID, containerId.toString(), b);
     }
+    if (resource != null) {
+      add(Keys.RESOURCE, resource.toString(), b);
+    }
     appendCallerContext(b, callerContext);
     return b.toString();
   }
@@ -245,9 +257,9 @@ public class RMAuditLogger {
    */
   static String createFailureLog(String user, String operation, String perm,
       String target, String description, ApplicationId appId,
-      ApplicationAttemptId attemptId, ContainerId containerId) {
+      ApplicationAttemptId attemptId, ContainerId containerId, Resource resource) {
     return createFailureLog(user, operation, perm, target, description, appId,
-        attemptId, containerId, null);
+        attemptId, containerId, resource, null);
   }
 
   /**
@@ -261,6 +273,7 @@ public class RMAuditLogger {
    *                    failed.
    * @param appId Application Id in which operation was performed.
    * @param containerId Container Id in which operation was performed.
+   * @param resource Resources associated with container.
    *
    * <br><br>
    * Note that the {@link RMAuditLogger} uses tabs ('\t') as a key-val delimiter
@@ -268,10 +281,10 @@ public class RMAuditLogger {
    */
   public static void logFailure(String user, String operation, String perm,
       String target, String description, ApplicationId appId, 
-      ContainerId containerId) {
+      ContainerId containerId, Resource resource) {
     if (LOG.isWarnEnabled()) {
       LOG.warn(createFailureLog(user, operation, perm, target, description,
-          appId, null, containerId));
+          appId, null, containerId, resource));
     }
   }
 
@@ -295,7 +308,7 @@ public class RMAuditLogger {
       ApplicationAttemptId attemptId) {
     if (LOG.isWarnEnabled()) {
       LOG.warn(createFailureLog(user, operation, perm, target, description,
-          appId, attemptId, null));
+          appId, attemptId, null, null));
     }
   }
   
@@ -304,7 +317,7 @@ public class RMAuditLogger {
       CallerContext callerContext) {
     if (LOG.isWarnEnabled()) {
       LOG.warn(createFailureLog(user, operation, perm, target, description,
-          appId, null, null, callerContext));
+          appId, null, null, null, callerContext));
     }
   }
 
@@ -327,7 +340,7 @@ public class RMAuditLogger {
       String target, String description, ApplicationId appId) {
     if (LOG.isWarnEnabled()) {
       LOG.warn(createFailureLog(user, operation, perm, target, description,
-          appId, null, null));
+          appId, null, null, null));
     }
   }
 
@@ -349,7 +362,7 @@ public class RMAuditLogger {
       String target, String description) {
     if (LOG.isWarnEnabled()) {
       LOG.warn(createFailureLog(user, operation, perm, target, description,
-          null, null, null));
+          null, null, null, null));
     }
   }
 

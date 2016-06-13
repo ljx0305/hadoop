@@ -37,6 +37,8 @@ import org.apache.hadoop.yarn.api.protocolrecords.IncreaseContainersResourceRequ
 import org.apache.hadoop.yarn.api.protocolrecords.IncreaseContainersResourceResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetContainerStatusesRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetContainerStatusesResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.SignalContainerRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.SignalContainerResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.StartContainerRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.StartContainersRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.StartContainersResponse;
@@ -92,6 +94,7 @@ public class TestApplicationMasterLauncher {
     String nmHostAtContainerManager = null;
     long submitTimeAtContainerManager;
     int maxAppAttempts;
+    private String queueName;
 
     @Override
     public StartContainersResponse
@@ -120,6 +123,8 @@ public class TestApplicationMasterLauncher {
       submitTimeAtContainerManager =
           Long.parseLong(env.get(ApplicationConstants.APP_SUBMIT_TIME_ENV));
       maxAppAttempts = YarnConfiguration.DEFAULT_RM_AM_MAX_ATTEMPTS;
+      queueName = env.get(ApplicationConstants.Environment
+              .YARN_RESOURCEMANAGER_APPLICATION_QUEUE.key());
       return StartContainersResponse.newInstance(
         new HashMap<String, ByteBuffer>(), new ArrayList<ContainerId>(),
         new HashMap<ContainerId, SerializedException>());
@@ -143,6 +148,12 @@ public class TestApplicationMasterLauncher {
     public IncreaseContainersResourceResponse increaseContainersResource(
         IncreaseContainersResourceRequest request)
             throws YarnException {
+      return null;
+    }
+
+    @Override
+    public SignalContainerResponse signalToContainer(
+        SignalContainerRequest request) throws YarnException, IOException {
       return null;
     }
   }
@@ -182,6 +193,8 @@ public class TestApplicationMasterLauncher {
       containerManager.nmHostAtContainerManager);
     Assert.assertEquals(YarnConfiguration.DEFAULT_RM_AM_MAX_ATTEMPTS,
         containerManager.maxAppAttempts);
+    Assert.assertEquals(YarnConfiguration.DEFAULT_QUEUE_NAME,
+        containerManager.queueName);
 
     MockAM am = new MockAM(rm.getRMContext(), rm
         .getApplicationMasterService(), appAttemptId);
@@ -190,7 +203,7 @@ public class TestApplicationMasterLauncher {
 
     //complete the AM container to finish the app normally
     nm1.nodeHeartbeat(attempt.getAppAttemptId(), 1, ContainerState.COMPLETE);
-    am.waitForState(RMAppAttemptState.FINISHED);
+    rm.waitForState(am.getApplicationAttemptId(), RMAppAttemptState.FINISHED);
 
     waitCount = 0;
     while (containerManager.cleanedup == false && waitCount++ < 20) {
@@ -199,7 +212,7 @@ public class TestApplicationMasterLauncher {
     }
     Assert.assertTrue(containerManager.cleanedup);
 
-    am.waitForState(RMAppAttemptState.FINISHED);
+    rm.waitForState(am.getApplicationAttemptId(), RMAppAttemptState.FINISHED);
     rm.stop();
   }
 
@@ -248,14 +261,13 @@ public class TestApplicationMasterLauncher {
     MockNM nm1 = rm.registerNode("127.0.0.1:1234", 5120);
 
     RMApp app = rm.submitApp(2000);
-    final ApplicationAttemptId appAttemptId = app.getCurrentAppAttempt()
-        .getAppAttemptId();
 
     // kick the scheduling
     nm1.nodeHeartbeat(true);
     dispatcher.await();
 
-    rm.waitForState(appAttemptId, RMAppAttemptState.LAUNCHED, 500);
+    MockRM.waitForState(app.getCurrentAppAttempt(),
+      RMAppAttemptState.LAUNCHED, 500);
   }
 
 
@@ -310,7 +322,7 @@ public class TestApplicationMasterLauncher {
     am.unregisterAppAttempt();
     nm1.nodeHeartbeat(attempt.getAppAttemptId(), 1,
         ContainerState.COMPLETE);
-    am.waitForState(RMAppAttemptState.FINISHED);
+    rm.waitForState(am.getApplicationAttemptId(), RMAppAttemptState.FINISHED);
 
     try {
       amrs = am.allocate(new ArrayList<ResourceRequest>(),

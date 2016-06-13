@@ -95,9 +95,9 @@ public class JobStatus implements Writable, Cloneable {
   private String trackingUrl ="";
   private int numUsedSlots;
   private int numReservedSlots;
-  private int usedMem;
-  private int reservedMem;
-  private int neededMem;
+  private long usedMem;
+  private long reservedMem;
+  private long neededMem;
   private boolean isUber;
     
   /**
@@ -152,43 +152,71 @@ public class JobStatus implements Writable, Cloneable {
     }
 
    /**
-    * Create a job status object for a given jobid.
-    * @param jobid The jobid of the job
-    * @param setupProgress The progress made on the setup
-    * @param mapProgress The progress made on the maps
-    * @param reduceProgress The progress made on the reduces
-    * @param cleanupProgress The progress made on the cleanup
-    * @param runState The current state of the job
-    * @param jp Priority of the job.
-    * @param user userid of the person who submitted the job.
-    * @param jobName user-specified job name.
-    * @param queue queue name
-    * @param jobFile job configuration file.
-    * @param trackingUrl link to the web-ui for details of the job.
-    * @param isUber Whether job running in uber mode
-    */
-    public JobStatus(JobID jobid, float setupProgress, float mapProgress,
-                     float reduceProgress, float cleanupProgress,
-                     State runState, JobPriority jp,
-                     String user, String jobName, String queue,
-                     String jobFile, String trackingUrl, boolean isUber) {
-      this.jobid = jobid;
-      this.setupProgress = setupProgress;
-      this.mapProgress = mapProgress;
-      this.reduceProgress = reduceProgress;
-      this.cleanupProgress = cleanupProgress;
-      this.runState = runState;
-      this.user = user;
-      this.queue = queue;
-      if (jp == null) {
-        throw new IllegalArgumentException("Job Priority cannot be null.");
-      }
-      priority = jp;
-      this.jobName = jobName;
-      this.jobFile = jobFile;
-      this.trackingUrl = trackingUrl;
-      this.isUber = isUber;
+   * Create a job status object for a given jobid.
+   * @param jobid The jobid of the job
+   * @param setupProgress The progress made on the setup
+   * @param mapProgress The progress made on the maps
+   * @param reduceProgress The progress made on the reduces
+   * @param cleanupProgress The progress made on the cleanup
+   * @param runState The current state of the job
+   * @param jp Priority of the job.
+   * @param user userid of the person who submitted the job.
+   * @param jobName user-specified job name.
+   * @param queue queue name
+   * @param jobFile job configuration file.
+   * @param trackingUrl link to the web-ui for details of the job.
+   * @param isUber Whether job running in uber mode
+   */
+  public JobStatus(JobID jobid, float setupProgress, float mapProgress,
+                    float reduceProgress, float cleanupProgress,
+                    State runState, JobPriority jp,
+                    String user, String jobName, String queue,
+                    String jobFile, String trackingUrl, boolean isUber) {
+     this(jobid, setupProgress, mapProgress, reduceProgress, cleanupProgress,
+         runState, jp, user, jobName, queue, jobFile, trackingUrl, isUber, "");
+  }
+
+ /**
+  * Create a job status object for a given jobid.
+  * @param jobid The jobid of the job
+  * @param setupProgress The progress made on the setup
+  * @param mapProgress The progress made on the maps
+  * @param reduceProgress The progress made on the reduces
+  * @param cleanupProgress The progress made on the cleanup
+  * @param runState The current state of the job
+  * @param jp Priority of the job.
+  * @param user userid of the person who submitted the job.
+  * @param jobName user-specified job name.
+  * @param queue queue name
+  * @param jobFile job configuration file.
+  * @param trackingUrl link to the web-ui for details of the job.
+  * @param isUber Whether job running in uber mode
+  * @param historyFile history file
+  */
+  public JobStatus(JobID jobid, float setupProgress, float mapProgress,
+                   float reduceProgress, float cleanupProgress,
+                   State runState, JobPriority jp,
+                   String user, String jobName, String queue,
+                   String jobFile, String trackingUrl, boolean isUber,
+                   String historyFile) {
+    this.jobid = jobid;
+    this.setupProgress = setupProgress;
+    this.mapProgress = mapProgress;
+    this.reduceProgress = reduceProgress;
+    this.cleanupProgress = cleanupProgress;
+    this.runState = runState;
+    this.user = user;
+    this.queue = queue;
+    if (jp == null) {
+      throw new IllegalArgumentException("Job Priority cannot be null.");
     }
+    priority = jp;
+    this.jobName = jobName;
+    this.jobFile = jobFile;
+    this.trackingUrl = trackingUrl;
+    this.isUber = isUber;
+    this.historyFile = historyFile;
+  }
 
 
   /**
@@ -552,42 +580,42 @@ public class JobStatus implements Writable, Cloneable {
   /**
    * @return the used memory
    */
-  public int getUsedMem() {
+  public long getUsedMem() {
     return usedMem;
   }
 
   /**
    * @param m the used memory
    */
-  public void setUsedMem(int m) {
+  public void setUsedMem(long m) {
     this.usedMem = m;
   }
 
   /**
    * @return the reserved memory
    */
-  public int getReservedMem() {
+  public long getReservedMem() {
     return reservedMem;
  }
 
   /**
    * @param r the reserved memory
    */
-  public void setReservedMem(int r) {
+  public void setReservedMem(long r) {
     this.reservedMem = r;
   }
 
   /**
    * @return the needed memory
    */
-  public int getNeededMem() {
+  public long getNeededMem() {
   return neededMem;
  }
 
   /**
    * @param n the needed memory
    */
-  public void setNeededMem(int n) {
+  public void setNeededMem(long n) {
     this.neededMem = n;
   }
 

@@ -62,6 +62,7 @@ public abstract class FSQueue implements Queue, Schedulable {
   private long fairSharePreemptionTimeout = Long.MAX_VALUE;
   private long minSharePreemptionTimeout = Long.MAX_VALUE;
   private float fairSharePreemptionThreshold = 0.5f;
+  private boolean preemptable = true;
 
   public FSQueue(String name, FairScheduler scheduler, FSParentQueue parent) {
     this.name = name;
@@ -69,6 +70,10 @@ public abstract class FSQueue implements Queue, Schedulable {
     this.metrics = FSQueueMetrics.forQueue(getName(), parent, true, scheduler.getConf());
     metrics.setMinShare(getMinShare());
     metrics.setMaxShare(getMaxShare());
+
+    AllocationConfiguration allocConf = scheduler.getAllocationConfiguration();
+    metrics.setMaxApps(allocConf.getQueueMaxApps(name));
+    metrics.setSchedulingPolicy(allocConf.getSchedulingPolicy(name).getName());
     this.parent = parent;
   }
   
@@ -130,18 +135,18 @@ public abstract class FSQueue implements Queue, Schedulable {
     QueueInfo queueInfo = recordFactory.newRecordInstance(QueueInfo.class);
     queueInfo.setQueueName(getQueueName());
 
-    if (scheduler.getClusterResource().getMemory() == 0) {
+    if (scheduler.getClusterResource().getMemorySize() == 0) {
       queueInfo.setCapacity(0.0f);
     } else {
-      queueInfo.setCapacity((float) getFairShare().getMemory() /
-          scheduler.getClusterResource().getMemory());
+      queueInfo.setCapacity((float) getFairShare().getMemorySize() /
+          scheduler.getClusterResource().getMemorySize());
     }
 
-    if (getFairShare().getMemory() == 0) {
+    if (getFairShare().getMemorySize() == 0) {
       queueInfo.setCurrentCapacity(0.0f);
     } else {
-      queueInfo.setCurrentCapacity((float) getResourceUsage().getMemory() /
-          getFairShare().getMemory());
+      queueInfo.setCurrentCapacity((float) getResourceUsage().getMemorySize() /
+          getFairShare().getMemorySize());
     }
 
     ArrayList<QueueInfo> childQueueInfos = new ArrayList<QueueInfo>();
@@ -235,6 +240,10 @@ public abstract class FSQueue implements Queue, Schedulable {
     this.fairSharePreemptionThreshold = fairSharePreemptionThreshold;
   }
 
+  public boolean isPreemptable() {
+    return preemptable;
+  }
+
   /**
    * Recomputes the shares for all child queues and applications based on this
    * queue's current share
@@ -242,7 +251,8 @@ public abstract class FSQueue implements Queue, Schedulable {
   public abstract void recomputeShares();
 
   /**
-   * Update the min/fair share preemption timeouts and threshold for this queue.
+   * Update the min/fair share preemption timeouts, threshold and preemption
+   * disabled flag for this queue.
    */
   public void updatePreemptionVariables() {
     // For min share timeout
@@ -263,6 +273,9 @@ public abstract class FSQueue implements Queue, Schedulable {
     if (fairSharePreemptionThreshold < 0 && parent != null) {
       fairSharePreemptionThreshold = parent.getFairSharePreemptionThreshold();
     }
+    // For option whether allow preemption from this queue
+    preemptable = scheduler.getAllocationConfiguration()
+        .isPreemptable(getName());
   }
 
   /**
@@ -298,6 +311,25 @@ public abstract class FSQueue implements Queue, Schedulable {
   }
 
   /**
+   * Helper method to check if requested VCores are over maxResource.
+   * @param requestedVCores the number of VCores requested
+   * @return true if the number of VCores requested is over the maxResource;
+   *         false otherwise
+   */
+  protected boolean isVCoresOverMaxResource(int requestedVCores) {
+    if (requestedVCores >= scheduler.getAllocationConfiguration().
+        getMaxResources(getName()).getVirtualCores()) {
+      return true;
+    }
+
+    if (getParent() == null) {
+      return false;
+    }
+
+    return getParent().isVCoresOverMaxResource(requestedVCores);
+  }
+
+  /**
    * Returns true if queue has at least one app running.
    */
   public boolean isActive() {
@@ -329,6 +361,14 @@ public abstract class FSQueue implements Queue, Schedulable {
   
   @Override
   public void decPendingResource(String nodeLabel, Resource resourceToDec) {
+  }
+
+  @Override
+  public void incReservedResource(String nodeLabel, Resource resourceToInc) {
+  }
+
+  @Override
+  public void decReservedResource(String nodeLabel, Resource resourceToDec) {
   }
 
   @Override

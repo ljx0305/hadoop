@@ -20,10 +20,7 @@ package org.apache.hadoop.yarn.server.nodemanager.containermanager.logaggregatio
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyMap;
-import static org.mockito.Matchers.eq;
-import static org.mockito.Matchers.isA;
+import static org.mockito.Matchers.*;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -55,6 +52,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.LogFactory;
@@ -217,16 +220,27 @@ public class TestLogAggregationService extends BaseContainerManagerTest {
         any(UserGroupInformation.class));
     verify(delSrvc).delete(eq(user), eq((Path) null),
       eq(new Path(app1LogDir.getAbsolutePath())));
-    delSrvc.stop();
     
     String containerIdStr = ConverterUtils.toString(container11);
     File containerLogDir = new File(app1LogDir, containerIdStr);
+    int count = 0;
+    int maxAttempts = 50;
     for (String fileType : new String[] { "stdout", "stderr", "syslog" }) {
       File f = new File(containerLogDir, fileType);
-      Assert.assertFalse("check "+f, f.exists());
+      count = 0;
+      while ((f.exists()) && (count < maxAttempts)) {
+        count++;
+        Thread.sleep(100);
+      }
+      Assert.assertFalse("File [" + f + "] was not deleted", f.exists());
     }
-
-    Assert.assertFalse(app1LogDir.exists());
+    count = 0;
+    while ((app1LogDir.exists()) && (count < maxAttempts)) {
+      count++;
+      Thread.sleep(100);
+    }
+    Assert.assertFalse("Directory [" + app1LogDir + "] was not deleted",
+      app1LogDir.exists());
 
     Path logFilePath =
         logAggregationService.getRemoteNodeLogFileForApp(application1,
@@ -695,7 +709,7 @@ public class TestLogAggregationService extends BaseContainerManagerTest {
     doThrow(new YarnRuntimeException("KABOOM!"))
       .when(logAggregationService).initAppAggregator(
           eq(appId), eq(user), any(Credentials.class),
-          anyMap(), any(LogAggregationContext.class));
+          anyMap(), any(LogAggregationContext.class), anyLong());
     LogAggregationContext contextWithAMAndFailed =
         Records.newRecord(LogAggregationContext.class);
     contextWithAMAndFailed.setLogAggregationPolicyClassName(
@@ -760,8 +774,8 @@ public class TestLogAggregationService extends BaseContainerManagerTest {
 
     dispatcher.await();
     ApplicationEvent expectedEvents[] = new ApplicationEvent[]{
-        new ApplicationEvent(appId, 
-        		ApplicationEventType.APPLICATION_LOG_HANDLING_FAILED)
+        new ApplicationEvent(appId,
+            ApplicationEventType.APPLICATION_LOG_HANDLING_FAILED)
     };
     checkEvents(appEventHandler, expectedEvents, false,
         "getType", "getApplicationID", "getDiagnostic");
@@ -777,10 +791,15 @@ public class TestLogAggregationService extends BaseContainerManagerTest {
 
     logAggregationService.stop();
     assertEquals(0, logAggregationService.getNumAggregators());
-    verify(spyDelSrvc).delete(eq(user), any(Path.class),
+    // local log dir shouldn't be deleted given log aggregation cannot
+    // continue due to aggregated log dir creation failure on remoteFS.
+    verify(spyDelSrvc, never()).delete(eq(user), any(Path.class),
         Mockito.<Path>anyVararg());
     verify(logAggregationService).closeFileSystems(
         any(UserGroupInformation.class));
+    // make sure local log dir is not deleted in case log aggregation
+    // service cannot be initiated.
+    assertTrue(appLogDir.exists());
   }
 
   private void writeContainerLogs(File appLogDir, ContainerId containerId,
@@ -1038,6 +1057,143 @@ public class TestLogAggregationService extends BaseContainerManagerTest {
     appAcls.put(ApplicationAccessType.MODIFY_APP, "user group");
     appAcls.put(ApplicationAccessType.VIEW_APP, "*");
     return appAcls;
+  }
+
+  @Test (timeout = 30000)
+  public void testFixedSizeThreadPool() throws Exception {
+    // store configured thread pool size temporarily for restoration
+    int initThreadPoolSize = conf.getInt(YarnConfiguration
+        .NM_LOG_AGGREGATION_THREAD_POOL_SIZE,
+        YarnConfiguration.DEFAULT_NM_LOG_AGGREGATION_THREAD_POOL_SIZE);
+
+    int threadPoolSize = 3;
+    conf.setInt(YarnConfiguration.NM_LOG_AGGREGATION_THREAD_POOL_SIZE,
+        threadPoolSize);
+
+    DeletionService delSrvc = mock(DeletionService.class);
+
+    LocalDirsHandlerService dirSvc = mock(LocalDirsHandlerService.class);
+    when(dirSvc.getLogDirs()).thenThrow(new RuntimeException());
+
+    LogAggregationService logAggregationService =
+      new LogAggregationService(dispatcher, this.context, delSrvc, dirSvc);
+
+    logAggregationService.init(this.conf);
+    logAggregationService.start();
+
+    ExecutorService executorService = logAggregationService.threadPool;
+
+    // used to block threads in the thread pool because main thread always
+    // acquires the write lock first.
+    final ReadWriteLock rwLock = new ReentrantReadWriteLock();
+    final Lock rLock = rwLock.readLock();
+    final Lock wLock = rwLock.writeLock();
+
+    try {
+      wLock.lock();
+      Runnable runnable = new Runnable() {
+        @Override
+        public void run() {
+          try {
+            // threads in the thread pool running this will be blocked
+            rLock.tryLock(35000, TimeUnit.MILLISECONDS);
+          } catch (InterruptedException e) {
+            e.printStackTrace();
+          } finally {
+            rLock.unlock();
+          }
+        }
+      };
+
+      // submit $(threadPoolSize + 1) runnables to the thread pool. If the thread
+      // pool size is set properly, only $(threadPoolSize) threads will be
+      // created in the thread pool, each of which is blocked on the read lock.
+      for(int i = 0; i < threadPoolSize + 1; i++)  {
+        executorService.submit(runnable);
+      }
+
+      // count the number of current running LogAggregationService threads
+      int runningThread = ((ThreadPoolExecutor) executorService).getActiveCount();
+      assertEquals(threadPoolSize, runningThread);
+    }
+    finally {
+      wLock.unlock();
+    }
+
+    logAggregationService.stop();
+    logAggregationService.close();
+
+    // restore the original configurations to avoid side effects
+    conf.setInt(YarnConfiguration.NM_LOG_AGGREGATION_THREAD_POOL_SIZE,
+        initThreadPoolSize);
+  }
+
+  @Test
+  public void testInvalidThreadPoolSizeNaN() throws IOException {
+      testInvalidThreadPoolSizeValue("NaN");
+  }
+
+  @Test
+  public void testInvalidThreadPoolSizeNegative() throws IOException {
+      testInvalidThreadPoolSizeValue("-100");
+  }
+
+  @Test
+  public void testInvalidThreadPoolSizeXLarge() throws  IOException {
+      testInvalidThreadPoolSizeValue("11111111111");
+  }
+
+  private void testInvalidThreadPoolSizeValue(final String threadPoolSize)
+      throws IOException {
+    Supplier<Boolean> isInputInvalid = new Supplier<Boolean>() {
+        @Override
+        public Boolean get() {
+          try {
+            int value = Integer.parseInt(threadPoolSize);
+            return value <= 0;
+          } catch (NumberFormatException ex) {
+            return true;
+          }
+        }
+    };
+
+    assertTrue("The thread pool size must be invalid to use with this " +
+        "method", isInputInvalid.get());
+
+
+    // store configured thread pool size temporarily for restoration
+    int initThreadPoolSize = conf.getInt(YarnConfiguration
+        .NM_LOG_AGGREGATION_THREAD_POOL_SIZE,
+        YarnConfiguration.DEFAULT_NM_LOG_AGGREGATION_THREAD_POOL_SIZE);
+
+    conf.set(YarnConfiguration.NM_LOG_AGGREGATION_THREAD_POOL_SIZE,
+         threadPoolSize);
+
+    DeletionService delSrvc = mock(DeletionService.class);
+
+    LocalDirsHandlerService dirSvc = mock(LocalDirsHandlerService.class);
+    when(dirSvc.getLogDirs()).thenThrow(new RuntimeException());
+
+    LogAggregationService logAggregationService =
+         new LogAggregationService(dispatcher, this.context, delSrvc, dirSvc);
+
+    logAggregationService.init(this.conf);
+    logAggregationService.start();
+
+    ThreadPoolExecutor executorService = (ThreadPoolExecutor)
+        logAggregationService.threadPool;
+    assertEquals("The thread pool size should be set to the value of YARN" +
+        ".DEFAULT_NM_LOG_AGGREGATION_THREAD_POOL_SIZE because the configured "
+         + " thread pool size is " + "invalid.",
+        YarnConfiguration.DEFAULT_NM_LOG_AGGREGATION_THREAD_POOL_SIZE,
+        executorService.getMaximumPoolSize());
+
+    logAggregationService.stop();
+    logAggregationService.close();
+
+     // retore original configuration to aviod side effects
+     conf.setInt(YarnConfiguration.NM_LOG_AGGREGATION_THREAD_POOL_SIZE,
+         initThreadPoolSize);
   }
 
   @Test(timeout=20000)
@@ -2125,6 +2281,67 @@ public class TestLogAggregationService extends BaseContainerManagerTest {
       }
     }, 1000, 20000);
     logAggregationService.stop();
+  }
+
+  @Test (timeout = 20000)
+  public void testSkipUnnecessaryNNOperationsForShortJob() throws Exception {
+    LogAggregationContext logAggregationContext =
+        Records.newRecord(LogAggregationContext.class);
+    logAggregationContext.setLogAggregationPolicyClassName(
+        FailedOrKilledContainerLogAggregationPolicy.class.getName());
+    verifySkipUnnecessaryNNOperations(logAggregationContext, 0, 2, 0);
+  }
+
+  @Test (timeout = 20000)
+  public void testSkipUnnecessaryNNOperationsForService() throws Exception {
+    this.conf.setLong(
+        YarnConfiguration.NM_LOG_AGGREGATION_ROLL_MONITORING_INTERVAL_SECONDS,
+        3600);
+    LogAggregationContext contextWithAMOnly =
+        Records.newRecord(LogAggregationContext.class);
+    contextWithAMOnly.setLogAggregationPolicyClassName(
+        AMOnlyLogAggregationPolicy.class.getName());
+    contextWithAMOnly.setRolledLogsIncludePattern("sys*");
+    contextWithAMOnly.setRolledLogsExcludePattern("std_final");
+    verifySkipUnnecessaryNNOperations(contextWithAMOnly, 1, 4, 1);
+  }
+
+  private void verifySkipUnnecessaryNNOperations(
+      LogAggregationContext logAggregationContext,
+      int expectedLogAggregationTimes, int expectedAggregationReportNum,
+      int expectedCleanupOldLogsTimes) throws Exception {
+    LogAggregationService logAggregationService = new LogAggregationService(
+        dispatcher, this.context, this.delSrvc, super.dirsHandler);
+    logAggregationService.init(this.conf);
+    logAggregationService.start();
+
+    ApplicationId appId = createApplication();
+    logAggregationService.handle(new LogHandlerAppStartedEvent(appId, this.user,
+        null, this.acls, logAggregationContext));
+
+    // Container finishes
+    String[] logFiles = new String[] { "sysout" };
+    finishContainer(appId, logAggregationService,
+        ContainerType.APPLICATION_MASTER, 1, 0, logFiles);
+    AppLogAggregatorImpl aggregator =
+        (AppLogAggregatorImpl) logAggregationService.getAppLogAggregators()
+            .get(appId);
+    aggregator.doLogAggregationOutOfBand();
+
+    Thread.sleep(2000);
+    aggregator.doLogAggregationOutOfBand();
+    Thread.sleep(2000);
+
+    // App finishes.
+    logAggregationService.handle(new LogHandlerAppFinishedEvent(appId));
+    logAggregationService.stop();
+
+    assertEquals(expectedLogAggregationTimes,
+        aggregator.getLogAggregationTimes());
+    assertEquals(expectedAggregationReportNum,
+        this.context.getLogAggregationStatusForApps().size());
+    assertEquals(expectedCleanupOldLogsTimes,
+        aggregator.getCleanupOldLogTimes());
   }
 
   private int numOfLogsAvailable(LogAggregationService logAggregationService,

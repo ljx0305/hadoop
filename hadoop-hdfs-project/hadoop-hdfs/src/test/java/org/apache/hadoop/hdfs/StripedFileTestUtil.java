@@ -25,14 +25,19 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.client.impl.BlockReaderTestUtil;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.ErasureCodingPolicy;
 import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedStripedBlock;
+import org.apache.hadoop.hdfs.server.namenode.ErasureCodingPolicyManager;
 import org.apache.hadoop.hdfs.util.StripedBlockUtil;
 import org.apache.hadoop.hdfs.web.WebHdfsFileSystem.WebHdfsInputStream;
+import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.erasurecode.CodecUtil;
+import org.apache.hadoop.io.erasurecode.ErasureCoderOptions;
 import org.apache.hadoop.io.erasurecode.rawcoder.RawErasureEncoder;
 import org.junit.Assert;
 
@@ -56,16 +61,21 @@ public class StripedFileTestUtil {
    * These values correspond to the values used by the system default erasure
    * coding policy.
    */
-  public static final short NUM_DATA_BLOCKS = (short) 6;
-  public static final short NUM_PARITY_BLOCKS = (short) 3;
-  public static final int BLOCK_STRIPED_CELL_SIZE = 64 * 1024;
+  public static final ErasureCodingPolicy TEST_EC_POLICY =
+      ErasureCodingPolicyManager.getSystemDefaultPolicy();
+  public static final short NUM_DATA_BLOCKS =
+      (short) TEST_EC_POLICY.getNumDataUnits();
+  public static final short NUM_PARITY_BLOCKS =
+      (short) TEST_EC_POLICY.getNumParityUnits();
+  public static final int BLOCK_STRIPED_CELL_SIZE =
+      TEST_EC_POLICY.getCellSize();
 
   static int stripesPerBlock = 4;
   public static int blockSize = BLOCK_STRIPED_CELL_SIZE * stripesPerBlock;
   static int numDNs = NUM_DATA_BLOCKS + NUM_PARITY_BLOCKS + 2;
   static int BLOCK_GROUP_SIZE = blockSize * NUM_DATA_BLOCKS;
 
-  static byte[] generateBytes(int cnt) {
+  public static byte[] generateBytes(int cnt) {
     byte[] bytes = new byte[cnt];
     for (int i = 0; i < cnt; i++) {
       bytes[i] = getByte(i);
@@ -76,16 +86,6 @@ public class StripedFileTestUtil {
   static byte getByte(long pos) {
     final int mod = 29;
     return (byte) (pos % mod + 1);
-  }
-
-  static int readAll(FSDataInputStream in, byte[] buf) throws IOException {
-    int readLen = 0;
-    int ret;
-    while ((ret = in.read(buf, readLen, buf.length - readLen)) >= 0 &&
-        readLen <= buf.length) {
-      readLen += ret;
-    }
-    return readLen;
   }
 
   static void verifyLength(FileSystem fs, Path srcPath, int fileLength)
@@ -207,11 +207,11 @@ public class StripedFileTestUtil {
   static void assertSeekAndRead(FSDataInputStream fsdis, int pos,
       int writeBytes) throws IOException {
     fsdis.seek(pos);
-    byte[] buf = new byte[writeBytes];
-    int readLen = StripedFileTestUtil.readAll(fsdis, buf);
-    assertEquals(readLen, writeBytes - pos);
-    for (int i = 0; i < readLen; i++) {
-      assertEquals("Byte at " + i + " should be the same", StripedFileTestUtil.getByte(pos + i), buf[i]);
+    byte[] buf = new byte[writeBytes - pos];
+    IOUtils.readFully(fsdis, buf, 0, buf.length);
+    for (int i = 0; i < buf.length; i++) {
+      assertEquals("Byte at " + i + " should be the same",
+          StripedFileTestUtil.getByte(pos + i), buf[i]);
     }
   }
 
@@ -492,8 +492,12 @@ public class StripedFileTestUtil {
         System.arraycopy(tmp, 0, dataBytes[i], 0, tmp.length);
       }
     }
+
+    ErasureCoderOptions coderOptions = new ErasureCoderOptions(
+        dataBytes.length, parityBytes.length);
     final RawErasureEncoder encoder =
-        CodecUtil.createRSRawEncoder(conf, dataBytes.length, parityBytes.length);
+        CodecUtil.createRawEncoder(conf, TEST_EC_POLICY.getCodecName(),
+            coderOptions);
     encoder.encode(dataBytes, expectedParityBytes);
     for (int i = 0; i < parityBytes.length; i++) {
       if (checkSet.contains(i + dataBytes.length)){
@@ -501,5 +505,35 @@ public class StripedFileTestUtil {
             parityBytes[i]);
       }
     }
+  }
+
+  /**
+   * Wait for the reconstruction to be finished when the file has
+   * corrupted blocks.
+   */
+  public static LocatedBlocks waitForReconstructionFinished(Path file,
+                                  DistributedFileSystem fs, int groupSize)
+      throws Exception {
+    final int attempts = 60;
+    for (int i = 0; i < attempts; i++) {
+      LocatedBlocks locatedBlocks = getLocatedBlocks(file, fs);
+      LocatedStripedBlock lastBlock =
+          (LocatedStripedBlock)locatedBlocks.getLastLocatedBlock();
+      DatanodeInfo[] storageInfos = lastBlock.getLocations();
+      if (storageInfos.length >= groupSize) {
+        return locatedBlocks;
+      }
+      Thread.sleep(1000);
+    }
+    throw new IOException("Time out waiting for EC block reconstruction.");
+  }
+
+  /**
+   * Get the located blocks of a file.
+   */
+  public static LocatedBlocks getLocatedBlocks(Path file,
+                                               DistributedFileSystem fs)
+      throws IOException {
+    return fs.getClient().getLocatedBlocks(file.toString(), 0, Long.MAX_VALUE);
   }
 }

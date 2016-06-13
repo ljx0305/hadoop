@@ -18,23 +18,46 @@
 
 package org.apache.hadoop.fs.s3a;
 
-public class Constants {
+import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.classification.InterfaceStability;
+
+/**
+ * All the constants used with the {@link S3AFileSystem}.
+ */
+@InterfaceAudience.Public
+@InterfaceStability.Evolving
+public final class Constants {
+
+  private Constants() {
+  }
+
   // s3 access key
   public static final String ACCESS_KEY = "fs.s3a.access.key";
 
   // s3 secret key
   public static final String SECRET_KEY = "fs.s3a.secret.key";
 
+  // aws credentials provider
+  public static final String AWS_CREDENTIALS_PROVIDER =
+      "fs.s3a.aws.credentials.provider";
+
+  // session token for when using TemporaryAWSCredentialsProvider
+  public static final String SESSION_TOKEN = "fs.s3a.session.token";
+
   // number of simultaneous connections to s3
   public static final String MAXIMUM_CONNECTIONS = "fs.s3a.connection.maximum";
   public static final int DEFAULT_MAXIMUM_CONNECTIONS = 15;
-  
+
   // connect to s3 over ssl?
   public static final String SECURE_CONNECTIONS = "fs.s3a.connection.ssl.enabled";
   public static final boolean DEFAULT_SECURE_CONNECTIONS = true;
 
   //use a custom endpoint?
   public static final String ENDPOINT = "fs.s3a.endpoint";
+
+  //Enable path style access? Overrides default virtual hosting
+  public static final String PATH_STYLE_ACCESS = "fs.s3a.path.style.access";
+
   //connect to s3 through a proxy server?
   public static final String PROXY_HOST = "fs.s3a.proxy.host";
   public static final String PROXY_PORT = "fs.s3a.proxy.port";
@@ -50,7 +73,7 @@ public class Constants {
   // seconds until we give up trying to establish a connection to s3
   public static final String ESTABLISH_TIMEOUT = "fs.s3a.connection.establish.timeout";
   public static final int DEFAULT_ESTABLISH_TIMEOUT = 50000;
-  
+
   // seconds until we give up on a connection to s3
   public static final String SOCKET_TIMEOUT = "fs.s3a.connection.timeout";
   public static final int DEFAULT_SOCKET_TIMEOUT = 200000;
@@ -74,10 +97,13 @@ public class Constants {
   // size of each of or multipart pieces in bytes
   public static final String MULTIPART_SIZE = "fs.s3a.multipart.size";
   public static final long DEFAULT_MULTIPART_SIZE = 104857600; // 100 MB
-  
+
   // minimum size in bytes before we start a multipart uploads or copy
   public static final String MIN_MULTIPART_THRESHOLD = "fs.s3a.multipart.threshold";
   public static final long DEFAULT_MIN_MULTIPART_THRESHOLD = Integer.MAX_VALUE;
+
+  //enable multiobject-delete calls?
+  public static final String ENABLE_MULTI_DELETE = "fs.s3a.multiobjectdelete.enable";
 
   // comma separated list of directories
   public static final String BUFFER_DIR = "fs.s3a.buffer.dir";
@@ -104,8 +130,15 @@ public class Constants {
   public static final long DEFAULT_PURGE_EXISTING_MULTIPART_AGE = 14400;
 
   // s3 server-side encryption
-  public static final String SERVER_SIDE_ENCRYPTION_ALGORITHM = 
-    "fs.s3a.server-side-encryption-algorithm";
+  public static final String SERVER_SIDE_ENCRYPTION_ALGORITHM =
+      "fs.s3a.server-side-encryption-algorithm";
+
+  /**
+   * The standard encryption algorithm AWS supports.
+   * Different implementations may support others (or none).
+   */
+  public static final String SERVER_SIDE_ENCRYPTION_AES256 =
+      "AES256";
 
   //override signature algorithm used for signing requests
   public static final String SIGNING_ALGORITHM = "fs.s3a.signing-algorithm";
@@ -115,4 +148,10 @@ public class Constants {
   public static final String FS_S3A = "s3a";
 
   public static final int S3A_DEFAULT_PORT = -1;
+
+  public static final String USER_AGENT_PREFIX = "fs.s3a.user.agent.prefix";
+
+  /** read ahead buffer size to prevent connection re-establishments. */
+  public static final String READAHEAD_RANGE = "fs.s3a.readahead.range";
+  public static final long DEFAULT_READAHEAD_RANGE = 64 * 1024;
 }

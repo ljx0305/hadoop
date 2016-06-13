@@ -19,21 +19,7 @@
 Hadoop: Setting up a Single Node Cluster.
 =========================================
 
-* [Hadoop: Setting up a Single Node Cluster.](#Hadoop:_Setting_up_a_Single_Node_Cluster.)
-    * [Purpose](#Purpose)
-    * [Prerequisites](#Prerequisites)
-        * [Supported Platforms](#Supported_Platforms)
-        * [Required Software](#Required_Software)
-        * [Installing Software](#Installing_Software)
-    * [Download](#Download)
-    * [Prepare to Start the Hadoop Cluster](#Prepare_to_Start_the_Hadoop_Cluster)
-    * [Standalone Operation](#Standalone_Operation)
-    * [Pseudo-Distributed Operation](#Pseudo-Distributed_Operation)
-        * [Configuration](#Configuration)
-        * [Setup passphraseless ssh](#Setup_passphraseless_ssh)
-        * [Execution](#Execution)
-        * [YARN on a Single Node](#YARN_on_a_Single_Node)
-    * [Fully-Distributed Operation](#Fully-Distributed_Operation)
+<!-- MACRO{toc|fromDepth=0|toDepth=3} -->
 
 Purpose
 -------
@@ -158,7 +144,7 @@ The following instructions are to run a MapReduce job locally. If you want to ex
 
 3.  Browse the web interface for the NameNode; by default it is available at:
 
-    * NameNode - `http://localhost:50070/`
+    * NameNode - `http://localhost:9870/`
 
 4.  Make the HDFS directories required to execute MapReduce jobs:
 
@@ -167,7 +153,8 @@ The following instructions are to run a MapReduce job locally. If you want to ex
 
 5.  Copy the input files into the distributed filesystem:
 
-          $ bin/hdfs dfs -put etc/hadoop input
+          $ bin/hdfs dfs -mkdir input
+          $ bin/hdfs dfs -put etc/hadoop/*.xml input
 
 6.  Run some of the examples provided:
 
@@ -194,12 +181,22 @@ You can run a MapReduce job on YARN in a pseudo-distributed mode by setting a fe
 
 The following instructions assume that 1. ~ 4. steps of [the above instructions](#Execution) are already executed.
 
-1.  Configure parameters as follows:`etc/hadoop/mapred-site.xml`:
+1.  Configure parameters as follows:
+
+    `etc/hadoop/mapred-site.xml`:
 
         <configuration>
             <property>
                 <name>mapreduce.framework.name</name>
                 <value>yarn</value>
+            </property>
+            <property>
+                <name>mapreduce.admin.user.env</name>
+                <value>HADOOP_MAPRED_HOME=$HADOOP_COMMON_HOME</value>
+            </property>
+            <property>
+                <name>yarn.app.mapreduce.am.env</name>
+                <value>HADOOP_MAPRED_HOME=$HADOOP_COMMON_HOME</value>
             </property>
         </configuration>
 

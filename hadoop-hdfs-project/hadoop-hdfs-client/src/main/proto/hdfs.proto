@@ -92,6 +92,8 @@ message DatanodeInfoProto {
     NORMAL = 0;
     DECOMMISSION_INPROGRESS = 1;
     DECOMMISSIONED = 2;
+    ENTERING_MAINTENANCE = 3;
+    IN_MAINTENANCE = 4;
   }
 
   optional AdminState adminState = 10 [default = NORMAL];
@@ -337,6 +339,7 @@ message ErasureCodingPolicyProto {
   required string name = 1;
   required ECSchemaProto schema = 2;
   required uint32 cellSize = 3;
+  required uint32 id = 4; // Actually a byte - only 8 bits used
 }
 
 /**

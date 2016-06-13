@@ -49,6 +49,7 @@ import org.apache.hadoop.io.SequenceFile;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.compress.BZip2Codec;
 import org.apache.hadoop.io.compress.CompressionCodec;
+import org.apache.hadoop.net.ServerSocketUtil;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.test.PathUtils;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -553,6 +554,38 @@ public class TestDFSShell {
       if (bak != null) {
         System.setErr(bak);
       }
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }
+  }
+
+  @Test
+  public void testMoveWithTargetPortEmpty() throws Exception {
+    Configuration conf = new HdfsConfiguration();
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster.Builder(conf)
+          .format(true)
+          .numDataNodes(2)
+          .nameNodePort(ServerSocketUtil.waitForPort(
+              HdfsClientConfigKeys.DFS_NAMENODE_RPC_PORT_DEFAULT, 10))
+          .waitSafeMode(true)
+          .build();
+      FileSystem srcFs = cluster.getFileSystem();
+      FsShell shell = new FsShell();
+      shell.setConf(conf);
+      String[] argv = new String[2];
+      argv[0] = "-mkdir";
+      argv[1] = "/testfile";
+      ToolRunner.run(shell, argv);
+      argv = new String[3];
+      argv[0] = "-mv";
+      argv[1] = srcFs.getUri() + "/testfile";
+      argv[2] = "hdfs://localhost/testfile2";
+      int ret = ToolRunner.run(shell, argv);
+      assertEquals("mv should have succeeded", 0, ret);
+    } finally {
       if (cluster != null) {
         cluster.shutdown();
       }
@@ -3344,7 +3377,7 @@ public class TestDFSShell {
       fs.createSnapshot(reserved, "snap");
       fail("Can't create snapshot on /.reserved");
     } catch (FileNotFoundException e) {
-      assertTrue(e.getMessage().contains("Directory does not exist"));
+      assertTrue(e.getMessage().contains("Directory/File does not exist"));
     }
     cluster.shutdown();
   }

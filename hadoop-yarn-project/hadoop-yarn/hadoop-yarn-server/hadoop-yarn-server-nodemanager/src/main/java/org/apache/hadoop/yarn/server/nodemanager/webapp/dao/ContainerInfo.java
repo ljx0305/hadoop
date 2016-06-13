@@ -53,7 +53,6 @@ public class ContainerInfo {
   @XmlTransient
   protected String exitStatus;
 
-  @XmlElementWrapper
   protected List<String> containerLogFiles;
 
   public ContainerInfo() {
@@ -82,7 +81,7 @@ public class ContainerInfo {
     this.user = container.getUser();
     Resource res = container.getResource();
     if (res != null) {
-      this.totalMemoryNeededMB = res.getMemory();
+      this.totalMemoryNeededMB = res.getMemorySize();
       this.totalVCoresNeeded = res.getVirtualCores();
     }
     this.containerLogsShortLink = ujoin("containerlogs", this.id,

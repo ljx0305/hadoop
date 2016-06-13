@@ -86,7 +86,7 @@ public class HsJobBlock extends HtmlBlock {
         _("State:", job.getState()).
         _("Uberized:", job.isUber()).
         _("Submitted:", new Date(job.getSubmitTime())).
-        _("Started:", new Date(job.getStartTime())).
+        _("Started:", job.getStartTimeStr()).
         _("Finished:", new Date(job.getFinishTime())).
         _("Elapsed:", StringUtils.formatTime(
             Times.elapsed(job.getStartTime(), job.getFinishTime(), false)));
@@ -142,7 +142,7 @@ public class HsJobBlock extends HtmlBlock {
               td().a(".nodelink", url(MRWebAppUtil.getYARNWebappScheme(),
                   attempt.getNodeHttpAddress()),
                   attempt.getNodeHttpAddress())._().
-              td().a(".logslink", url(attempt.getShortLogsLink()), 
+              td().a(".logslink", url(attempt.getLogsLink()),
                       "logs")._().
             _();
           }

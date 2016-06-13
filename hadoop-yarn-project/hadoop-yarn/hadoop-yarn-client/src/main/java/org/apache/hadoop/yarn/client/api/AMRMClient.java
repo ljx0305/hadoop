@@ -34,6 +34,8 @@ import org.apache.hadoop.yarn.api.protocolrecords.RegisterApplicationMasterRespo
 
 import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.hadoop.yarn.api.records.ExecutionType;
+import org.apache.hadoop.yarn.api.records.ExecutionTypeRequest;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
@@ -108,6 +110,7 @@ public abstract class AMRMClient<T extends AMRMClient.ContainerRequest> extends
     final Priority priority;
     final boolean relaxLocality;
     final String nodeLabelsExpression;
+    final ExecutionTypeRequest executionTypeRequest;
     
     /**
      * Instantiates a {@link ContainerRequest} with the given constraints and
@@ -152,6 +155,34 @@ public abstract class AMRMClient<T extends AMRMClient.ContainerRequest> extends
         String[] racks, Priority priority, boolean relaxLocality) {
       this(capability, nodes, racks, priority, relaxLocality, null);
     }
+
+    /**
+     * Instantiates a {@link ContainerRequest} with the given constraints.
+     *
+     * @param capability
+     *          The {@link Resource} to be requested for each container.
+     * @param nodes
+     *          Any hosts to request that the containers are placed on.
+     * @param racks
+     *          Any racks to request that the containers are placed on. The
+     *          racks corresponding to any hosts requested will be automatically
+     *          added to this list.
+     * @param priority
+     *          The priority at which to request the containers. Higher
+     *          priorities have lower numerical values.
+     * @param relaxLocality
+     *          If true, containers for this request may be assigned on hosts
+     *          and racks other than the ones explicitly requested.
+     * @param nodeLabelsExpression
+     *          Set node labels to allocate resource, now we only support
+     *          asking for only a single node label
+     */
+    public ContainerRequest(Resource capability, String[] nodes, String[] racks,
+        Priority priority, boolean relaxLocality, String nodeLabelsExpression) {
+      this(capability, nodes, racks, priority, relaxLocality,
+          nodeLabelsExpression,
+          ExecutionTypeRequest.newInstance());
+    }
           
     /**
      * Instantiates a {@link ContainerRequest} with the given constraints.
@@ -173,10 +204,12 @@ public abstract class AMRMClient<T extends AMRMClient.ContainerRequest> extends
      * @param nodeLabelsExpression
      *          Set node labels to allocate resource, now we only support
      *          asking for only a single node label
+     * @param executionTypeRequest
+     *          Set the execution type of the container request.
      */
-    public ContainerRequest(Resource capability, String[] nodes,
-        String[] racks, Priority priority, boolean relaxLocality,
-        String nodeLabelsExpression) {
+    public ContainerRequest(Resource capability, String[] nodes, String[] racks,
+        Priority priority, boolean relaxLocality, String nodeLabelsExpression,
+        ExecutionTypeRequest executionTypeRequest) {
       // Validate request
       Preconditions.checkArgument(capability != null,
           "The Resource to be requested for each container " +
@@ -194,6 +227,7 @@ public abstract class AMRMClient<T extends AMRMClient.ContainerRequest> extends
       this.priority = priority;
       this.relaxLocality = relaxLocality;
       this.nodeLabelsExpression = nodeLabelsExpression;
+      this.executionTypeRequest = executionTypeRequest;
     }
     
     public Resource getCapability() {
@@ -220,10 +254,16 @@ public abstract class AMRMClient<T extends AMRMClient.ContainerRequest> extends
       return nodeLabelsExpression;
     }
     
+    public ExecutionTypeRequest getExecutionTypeRequest() {
+      return executionTypeRequest;
+    }
+
     public String toString() {
       StringBuilder sb = new StringBuilder();
       sb.append("Capability[").append(capability).append("]");
       sb.append("Priority[").append(priority).append("]");
+      sb.append("ExecutionTypeRequest[").append(executionTypeRequest)
+          .append("]");
       return sb.toString();
     }
   }
@@ -350,10 +390,35 @@ public abstract class AMRMClient<T extends AMRMClient.ContainerRequest> extends
    * collection, requests will be returned in the same order as they were added.
    * @return Collection of request matching the parameters
    */
+  @InterfaceStability.Evolving
   public abstract List<? extends Collection<T>> getMatchingRequests(
                                            Priority priority, 
                                            String resourceName, 
                                            Resource capability);
+
+  /**
+   * Get outstanding <code>ContainerRequest</code>s matching the given
+   * parameters. These ContainerRequests should have been added via
+   * <code>addContainerRequest</code> earlier in the lifecycle. For performance,
+   * the AMRMClient may return its internal collection directly without creating
+   * a copy. Users should not perform mutable operations on the return value.
+   * Each collection in the list contains requests with identical
+   * <code>Resource</code> size that fit in the given capability. In a
+   * collection, requests will be returned in the same order as they were added.
+   * specify an <code>ExecutionType</code> .
+   * @param priority Priority
+   * @param resourceName Location
+   * @param executionType ExecutionType
+   * @param capability Capability
+   * @return Collection of request matching the parameters
+   */
+  @InterfaceStability.Evolving
+  public List<? extends Collection<T>> getMatchingRequests(
+      Priority priority, String resourceName, ExecutionType executionType,
+      Resource capability) {
+    throw new UnsupportedOperationException("The sub-class extending" +
+        " AMRMClient is expected to implement this !!");
+  }
   
   /**
    * Update application's blacklist with addition or removal resources.

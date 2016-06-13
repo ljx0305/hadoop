@@ -20,9 +20,7 @@ package org.apache.hadoop.fs.s3a.scale;
 
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.contract.ContractTestUtils;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,16 +32,22 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-import static org.junit.Assert.assertEquals;
-
+/**
+ * Test some scalable operations related to file renaming and deletion.
+ */
 public class TestS3ADeleteManyFiles extends S3AScaleTestBase {
   private static final Logger LOG =
       LoggerFactory.getLogger(TestS3ADeleteManyFiles.class);
 
-
-  @Rule
-  public Timeout testTimeout = new Timeout(30 * 60 * 1000);
-
+  /**
+   * CAUTION: If this test starts failing, please make sure that the
+   * {@link org.apache.hadoop.fs.s3a.Constants#MAX_THREADS} configuration is not
+   * set too low. Alternatively, consider reducing the
+   * <code>scale.test.operation.count</code> parameter in
+   * <code>getOperationCount()</code>.
+   *
+   * @see #getOperationCount()
+   */
   @Test
   public void testBulkRenameAndDelete() throws Throwable {
     final Path scaleTestDir = getTestPath();
@@ -61,7 +65,7 @@ public class TestS3ADeleteManyFiles extends S3AScaleTestBase {
     // use Executor to speed up file creation
     ExecutorService exec = Executors.newFixedThreadPool(16);
     final ExecutorCompletionService<Boolean> completionService =
-        new ExecutorCompletionService<Boolean>(exec);
+        new ExecutorCompletionService<>(exec);
     try {
       final byte[] data = ContractTestUtils.dataset(testBufferSize, 'a', 'z');
 

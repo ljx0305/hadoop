@@ -27,6 +27,7 @@ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_BLOCKREPORT_SPLIT_THRESHO
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_BLOCKREPORT_SPLIT_THRESHOLD_DEFAULT;
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_CACHEREPORT_INTERVAL_MSEC_DEFAULT;
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_CACHEREPORT_INTERVAL_MSEC_KEY;
+import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_LIFELINE_INTERVAL_SECONDS_KEY;
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_NON_LOCAL_LAZY_PERSIST;
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_NON_LOCAL_LAZY_PERSIST_DEFAULT;
 import static org.apache.hadoop.hdfs.client.HdfsClientConfigKeys.DFS_CLIENT_SOCKET_TIMEOUT_KEY;
@@ -87,8 +88,10 @@ public class DNConf {
 
   final long readaheadLength;
   final long heartBeatInterval;
+  private final long lifelineIntervalMs;
   final long blockReportInterval;
   final long blockReportSplitThreshold;
+  final long ibrInterval;
   final long initialBlockReportDelayMs;
   final long cacheReportInterval;
   final long dfsclientSlowIoWarningThresholdMs;
@@ -110,6 +113,9 @@ public class DNConf {
 
   // Allow LAZY_PERSIST writes from non-local clients?
   private final boolean allowNonLocalLazyPersist;
+
+  private final int volFailuresTolerated;
+  private final int volsConfigured;
 
   public DNConf(Configuration conf) {
     this.conf = conf;
@@ -156,6 +162,9 @@ public class DNConf {
         DFSConfigKeys.DFS_DATANODE_USE_DN_HOSTNAME_DEFAULT);
     this.blockReportInterval = conf.getLong(DFS_BLOCKREPORT_INTERVAL_MSEC_KEY,
         DFS_BLOCKREPORT_INTERVAL_MSEC_DEFAULT);
+    this.ibrInterval = conf.getLong(
+        DFSConfigKeys.DFS_BLOCKREPORT_INCREMENTAL_INTERVAL_MSEC_KEY,
+        DFSConfigKeys.DFS_BLOCKREPORT_INCREMENTAL_INTERVAL_MSEC_DEFAULT);
     this.blockReportSplitThreshold = conf.getLong(DFS_BLOCKREPORT_SPLIT_THRESHOLD_KEY,
                                             DFS_BLOCKREPORT_SPLIT_THRESHOLD_DEFAULT);
     this.cacheReportInterval = conf.getLong(DFS_CACHEREPORT_INTERVAL_MSEC_KEY,
@@ -181,6 +190,20 @@ public class DNConf {
     
     heartBeatInterval = conf.getLong(DFS_HEARTBEAT_INTERVAL_KEY,
         DFS_HEARTBEAT_INTERVAL_DEFAULT) * 1000L;
+    long confLifelineIntervalMs =
+        conf.getLong(DFS_DATANODE_LIFELINE_INTERVAL_SECONDS_KEY,
+        3 * conf.getLong(DFS_HEARTBEAT_INTERVAL_KEY,
+            DFS_HEARTBEAT_INTERVAL_DEFAULT)) * 1000L;
+    if (confLifelineIntervalMs <= heartBeatInterval) {
+      confLifelineIntervalMs = 3 * heartBeatInterval;
+      DataNode.LOG.warn(
+          String.format("%s must be set to a value greater than %s.  " +
+              "Resetting value to 3 * %s, which is %d milliseconds.",
+              DFS_DATANODE_LIFELINE_INTERVAL_SECONDS_KEY,
+              DFS_HEARTBEAT_INTERVAL_KEY, DFS_HEARTBEAT_INTERVAL_KEY,
+              confLifelineIntervalMs));
+    }
+    lifelineIntervalMs = confLifelineIntervalMs;
     
     // do we need to sync block file contents to disk when blockfile is closed?
     this.syncOnClose = conf.getBoolean(DFS_DATANODE_SYNCONCLOSE_KEY, 
@@ -218,6 +241,13 @@ public class DNConf {
     this.bpReadyTimeout = conf.getLong(
         DFS_DATANODE_BP_READY_TIMEOUT_KEY,
         DFS_DATANODE_BP_READY_TIMEOUT_DEFAULT);
+
+    this.volFailuresTolerated =
+        conf.getInt(DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_KEY,
+            DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_DEFAULT);
+    String[] dataDirs =
+        conf.getTrimmedStrings(DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY);
+    this.volsConfigured = (dataDirs == null) ? 0 : dataDirs.length;
   }
 
   // We get minimumNameNodeVersion via a method so it can be mocked out in tests.
@@ -333,5 +363,22 @@ public class DNConf {
 
   public long getBpReadyTimeout() {
     return bpReadyTimeout;
+  }
+
+  /**
+   * Returns the interval in milliseconds between sending lifeline messages.
+   *
+   * @return interval in milliseconds between sending lifeline messages
+   */
+  public long getLifelineIntervalMs() {
+    return lifelineIntervalMs;
+  }
+
+  public int getVolFailuresTolerated() {
+    return volFailuresTolerated;
+  }
+
+  public int getVolsConfigured() {
+    return volsConfigured;
   }
 }

@@ -19,6 +19,7 @@ package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
 
+import com.google.common.base.Supplier;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -34,6 +35,7 @@ import org.apache.hadoop.hdfs.server.namenode.LeaseExpiredException;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocols;
 import org.apache.hadoop.hdfs.tools.DFSAdmin;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.test.GenericTestUtils;
 import org.junit.Assert;
 import org.junit.Test;
 import org.mockito.Mockito;
@@ -256,11 +258,61 @@ public class TestClientProtocolForPipelineRecovery {
       final String[] args1 = {"-shutdownDatanode", dnAddr, "upgrade" };
       Assert.assertEquals(0, dfsadmin.run(args1));
       // Wait long enough to receive an OOB ack before closing the file.
-      Thread.sleep(4000);
+      GenericTestUtils.waitForThreadTermination(
+          "Async datanode shutdown thread", 100, 10000);
       // Retart the datanode 
       cluster.restartDataNode(0, true);
       // The following forces a data packet and end of block packets to be sent. 
       out.close();
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }
+  }
+
+  /**
+   * Test that the writer is kicked out of a node.
+   */
+  @Test
+  public void testEvictWriter() throws Exception {
+    Configuration conf = new HdfsConfiguration();
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster.Builder(conf)
+          .numDataNodes((int)3)
+          .build();
+      cluster.waitActive();
+      FileSystem fs = cluster.getFileSystem();
+      Path file = new Path("testEvictWriter.dat");
+      FSDataOutputStream out = fs.create(file, (short)2);
+      out.write(0x31);
+      out.hflush();
+
+      // get nodes in the pipeline
+      DFSOutputStream dfsOut = (DFSOutputStream)out.getWrappedStream();
+      DatanodeInfo[] nodes = dfsOut.getPipeline();
+      Assert.assertEquals(2, nodes.length);
+      String dnAddr = nodes[1].getIpcAddr(false);
+
+      // evict the writer from the second datanode and wait until
+      // the pipeline is rebuilt.
+      DFSAdmin dfsadmin = new DFSAdmin(conf);
+      final String[] args1 = {"-evictWriters", dnAddr };
+      Assert.assertEquals(0, dfsadmin.run(args1));
+      out.write(0x31);
+      out.hflush();
+
+      // get the new pipline and check the node is not in there.
+      nodes = dfsOut.getPipeline();
+      try {
+        Assert.assertTrue(nodes.length > 0 );
+        for (int i = 0; i < nodes.length; i++) {
+          Assert.assertFalse(dnAddr.equals(nodes[i].getIpcAddr(false)));
+        }
+      } finally {
+        out.close();
+      }
     } finally {
       if (cluster != null) {
         cluster.shutdown();
@@ -293,7 +345,8 @@ public class TestClientProtocolForPipelineRecovery {
       // issue shutdown to the datanode.
       final String[] args1 = {"-shutdownDatanode", dnAddr1, "upgrade" };
       Assert.assertEquals(0, dfsadmin.run(args1));
-      Thread.sleep(4000);
+      GenericTestUtils.waitForThreadTermination(
+          "Async datanode shutdown thread", 100, 10000);
       // This should succeed without restarting the node. The restart will
       // expire and regular pipeline recovery will kick in. 
       out.close();
@@ -309,7 +362,8 @@ public class TestClientProtocolForPipelineRecovery {
       // issue shutdown to the datanode.
       final String[] args2 = {"-shutdownDatanode", dnAddr2, "upgrade" };
       Assert.assertEquals(0, dfsadmin.run(args2));
-      Thread.sleep(4000);
+      GenericTestUtils.waitForThreadTermination(
+          "Async datanode shutdown thread", 100, 10000);
       try {
         // close should fail
         out.close();
@@ -319,6 +373,108 @@ public class TestClientProtocolForPipelineRecovery {
       if (cluster != null) {
         cluster.shutdown();
       }
+    }
+  }
+
+  /**
+   *  HDFS-9752. The client keeps sending heartbeat packets during datanode
+   *  rolling upgrades. The client should be able to retry pipeline recovery
+   *  more times than the default.
+   *  (in a row for the same packet, including the heartbeat packet)
+   *  (See{@link DataStreamer#pipelineRecoveryCount})
+   */
+  @Test(timeout = 60000)
+  public void testPipelineRecoveryOnDatanodeUpgrade() throws Exception {
+    Configuration conf = new HdfsConfiguration();
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster.Builder(conf).numDataNodes(2).build();
+      cluster.waitActive();
+      FileSystem fileSys = cluster.getFileSystem();
+
+      Path file = new Path("/testPipelineRecoveryOnDatanodeUpgrade");
+      DFSTestUtil.createFile(fileSys, file, 10240L, (short) 2, 0L);
+      final DFSOutputStream out = (DFSOutputStream) (fileSys.append(file).
+          getWrappedStream());
+      out.write(1);
+      out.hflush();
+
+      final long oldGs = out.getBlock().getGenerationStamp();
+      MiniDFSCluster.DataNodeProperties dnProps =
+          cluster.stopDataNodeForUpgrade(0);
+      GenericTestUtils.waitForThreadTermination(
+          "Async datanode shutdown thread", 100, 10000);
+      cluster.restartDataNode(dnProps, true);
+      cluster.waitActive();
+
+      // wait pipeline to be recovered
+      GenericTestUtils.waitFor(new Supplier<Boolean>() {
+        @Override
+        public Boolean get() {
+          return out.getBlock().getGenerationStamp() > oldGs;
+        }
+      }, 100, 10000);
+      Assert.assertEquals("The pipeline recovery count shouldn't increase",
+          0, out.getStreamer().getPipelineRecoveryCount());
+      out.write(1);
+      out.close();
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }
+  }
+
+  /**
+   * Test to make sure the checksum is set correctly after pipeline
+   * recovery transfers 0 byte partial block. If fails the test case
+   * will say "java.io.IOException: Failed to replace a bad datanode
+   * on the existing pipeline due to no more good datanodes being
+   * available to try."  This indicates there was a real failure
+   * after the staged failure.
+   */
+  @Test
+  public void testZeroByteBlockRecovery() throws Exception {
+    // Make the first datanode fail once. With 3 nodes and a block being
+    // created with 2 replicas, anything more than this planned failure
+    // will cause a test failure.
+    DataNodeFaultInjector dnFaultInjector = new DataNodeFaultInjector() {
+      int tries = 1;
+      @Override
+      public void stopSendingPacketDownstream() throws IOException {
+        if (tries > 0) {
+          tries--;
+          try {
+            Thread.sleep(60000);
+          } catch (InterruptedException ie) {
+            throw new IOException("Interrupted while sleeping. Bailing out.");
+          }
+        }
+      }
+    };
+    DataNodeFaultInjector oldDnInjector = DataNodeFaultInjector.get();
+    DataNodeFaultInjector.set(dnFaultInjector);
+
+    Configuration conf = new HdfsConfiguration();
+    conf.set(HdfsClientConfigKeys.DFS_CLIENT_SOCKET_TIMEOUT_KEY, "1000");
+    conf.set(HdfsClientConfigKeys.
+        BlockWrite.ReplaceDatanodeOnFailure.POLICY_KEY, "ALWAYS");
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster.Builder(conf).numDataNodes(3).build();
+      cluster.waitActive();
+
+      FileSystem fs = cluster.getFileSystem();
+      FSDataOutputStream out = fs.create(new Path("noheartbeat.dat"), (short)2);
+      out.write(0x31);
+      out.hflush();
+      out.close();
+
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+      DataNodeFaultInjector.set(oldDnInjector);
     }
   }
 }

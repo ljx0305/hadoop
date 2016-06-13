@@ -22,7 +22,14 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
-import java.io.*;
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -43,7 +50,6 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 
-import com.sun.jersey.api.client.config.DefaultClientConfig;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.Text;
@@ -51,11 +57,14 @@ import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.authentication.server.AuthenticationFilter;
 import org.apache.hadoop.security.authentication.server.PseudoAuthenticationHandler;
 import org.apache.hadoop.yarn.api.records.ApplicationAccessType;
+import org.apache.hadoop.yarn.api.records.ApplicationSubmissionContext;
 import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
 import org.apache.hadoop.yarn.api.records.LocalResource;
 import org.apache.hadoop.yarn.api.records.LocalResourceType;
 import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
+import org.apache.hadoop.yarn.api.records.LogAggregationContext;
 import org.apache.hadoop.yarn.api.records.QueueACL;
+import org.apache.hadoop.yarn.api.records.ReservationId;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.MockNM;
@@ -67,11 +76,13 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Capacity
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairSchedulerConfiguration;
+import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.AppPriority;
+import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.AppQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.AppState;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.ApplicationSubmissionContextInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.CredentialsInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.LocalResourceInfo;
-import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.*;
+import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.LogAggregationContextInfo;
 import org.apache.hadoop.yarn.util.ConverterUtils;
 import org.apache.hadoop.yarn.webapp.GenericExceptionHandler;
 import org.apache.hadoop.yarn.webapp.JerseyTestBase;
@@ -100,6 +111,7 @@ import com.sun.jersey.api.client.Client;
 import com.sun.jersey.api.client.ClientResponse;
 import com.sun.jersey.api.client.ClientResponse.Status;
 import com.sun.jersey.api.client.WebResource;
+import com.sun.jersey.api.client.config.DefaultClientConfig;
 import com.sun.jersey.api.client.filter.LoggingFilter;
 import com.sun.jersey.api.json.JSONJAXBContext;
 import com.sun.jersey.api.json.JSONMarshaller;
@@ -567,17 +579,21 @@ public class TestRMWebServicesAppsModification extends JerseyTestBase {
     MockNM amNodeManager = rm.registerNode("127.0.0.1:1234", 2048);
     amNodeManager.nodeHeartbeat(true);
     String[] testAppIds = { "application_1391705042196_0001", "random_string" };
-    for (String testAppId : testAppIds) {
+    for (int i = 0; i < testAppIds.length; i++) {
       AppState info = new AppState("KILLED");
       ClientResponse response =
-          this.constructWebResource("apps", testAppId, "state")
+          this.constructWebResource("apps", testAppIds[i], "state")
             .accept(MediaType.APPLICATION_XML)
             .entity(info, MediaType.APPLICATION_XML).put(ClientResponse.class);
       if (!isAuthenticationEnabled()) {
         assertEquals(Status.UNAUTHORIZED, response.getClientResponseStatus());
         continue;
       }
-      assertEquals(Status.NOT_FOUND, response.getClientResponseStatus());
+      if (i == 0) {
+        assertEquals(Status.NOT_FOUND, response.getClientResponseStatus());
+      } else {
+        assertEquals(Status.BAD_REQUEST, response.getClientResponseStatus());
+      }
     }
     rm.stop();
   }
@@ -792,6 +808,36 @@ public class TestRMWebServicesAppsModification extends JerseyTestBase {
     appInfo.getResource().setvCores(1);
     appInfo.setApplicationTags(tags);
 
+    // Set LogAggregationContextInfo
+    String includePattern = "file1";
+    String excludePattern = "file2";
+    String rolledLogsIncludePattern = "file3";
+    String rolledLogsExcludePattern = "file4";
+    String className = "policy_class";
+    String parameters = "policy_parameter";
+
+    LogAggregationContextInfo logAggregationContextInfo
+        = new LogAggregationContextInfo();
+    logAggregationContextInfo.setIncludePattern(includePattern);
+    logAggregationContextInfo.setExcludePattern(excludePattern);
+    logAggregationContextInfo.setRolledLogsIncludePattern(
+        rolledLogsIncludePattern);
+    logAggregationContextInfo.setRolledLogsExcludePattern(
+        rolledLogsExcludePattern);
+    logAggregationContextInfo.setLogAggregationPolicyClassName(className);
+    logAggregationContextInfo.setLogAggregationPolicyParameters(parameters);
+    appInfo.setLogAggregationContextInfo(logAggregationContextInfo);
+
+    // Set attemptFailuresValidityInterval
+    long attemptFailuresValidityInterval = 5000;
+    appInfo.setAttemptFailuresValidityInterval(
+        attemptFailuresValidityInterval);
+
+    // Set ReservationId
+    String reservationId = ReservationId.newInstance(
+        System.currentTimeMillis(), 1).toString();
+    appInfo.setReservationId(reservationId);
+
     ClientResponse response =
         this.constructWebResource(urlPath).accept(acceptMedia)
           .entity(appInfo, contentMedia).post(ClientResponse.class);
@@ -848,6 +894,23 @@ public class TestRMWebServicesAppsModification extends JerseyTestBase {
     assertTrue("Secrets missing from credentials object", cs
         .getAllSecretKeys().contains(key));
     assertEquals("mysecret", new String(cs.getSecretKey(key), "UTF-8"));
+
+    // Check LogAggregationContext
+    ApplicationSubmissionContext asc = app.getApplicationSubmissionContext();
+    LogAggregationContext lac = asc.getLogAggregationContext();
+    assertEquals(includePattern, lac.getIncludePattern());
+    assertEquals(excludePattern, lac.getExcludePattern());
+    assertEquals(rolledLogsIncludePattern, lac.getRolledLogsIncludePattern());
+    assertEquals(rolledLogsExcludePattern, lac.getRolledLogsExcludePattern());
+    assertEquals(className, lac.getLogAggregationPolicyClassName());
+    assertEquals(parameters, lac.getLogAggregationPolicyParameters());
+
+    // Check attemptFailuresValidityInterval
+    assertEquals(attemptFailuresValidityInterval,
+        asc.getAttemptFailuresValidityInterval());
+
+    // Check ReservationId
+    assertEquals(reservationId, app.getReservationId().toString());
 
     response =
         this.constructWebResource("apps", appId).accept(acceptMedia)

@@ -15,6 +15,7 @@ package org.apache.hadoop.security.authentication.client;
 
 import org.apache.hadoop.security.authentication.server.AuthenticationFilter;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -43,14 +44,14 @@ import java.util.Map;
  * URL url = new URL("http://foo:8080/bar");
  * AuthenticatedURL.Token token = new AuthenticatedURL.Token();
  * AuthenticatedURL aUrl = new AuthenticatedURL();
- * HttpURLConnection conn = new AuthenticatedURL(url, token).openConnection();
+ * HttpURLConnection conn = new AuthenticatedURL().openConnection(url, token);
  * ....
  * // use the 'conn' instance
  * ....
  *
  * // establishing a follow up connection using a token from the previous connection
  *
- * HttpURLConnection conn = new AuthenticatedURL(url, token).openConnection();
+ * HttpURLConnection conn = new AuthenticatedURL().openConnection(url, token);
  * ....
  * // use the 'conn' instance
  * ....
@@ -269,10 +270,15 @@ public class AuthenticatedURL {
           }
         }
       }
+    } else if (respCode == HttpURLConnection.HTTP_NOT_FOUND) {
+      token.set(null);
+      throw new FileNotFoundException(conn.getURL().toString());
     } else {
       token.set(null);
-      throw new AuthenticationException("Authentication failed, status: " + conn.getResponseCode() +
-                                        ", message: " + conn.getResponseMessage());
+      throw new AuthenticationException("Authentication failed" +
+          ", URL: " + conn.getURL() +
+          ", status: " + conn.getResponseCode() +
+          ", message: " + conn.getResponseMessage());
     }
   }
 

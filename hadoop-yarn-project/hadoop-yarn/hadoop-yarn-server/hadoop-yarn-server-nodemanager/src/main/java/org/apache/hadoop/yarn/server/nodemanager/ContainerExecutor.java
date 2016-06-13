@@ -308,6 +308,7 @@ public abstract class ContainerExecutor implements Configurable {
   }
 
   public enum ExitCode {
+    SUCCESS(0),
     FORCE_KILLED(137),
     TERMINATED(143),
     LOST(154);
@@ -404,7 +405,7 @@ public abstract class ContainerExecutor implements Configurable {
             .getBoolean(
                 YarnConfiguration.NM_WINDOWS_CONTAINER_MEMORY_LIMIT_ENABLED,
                 YarnConfiguration.DEFAULT_NM_WINDOWS_CONTAINER_MEMORY_LIMIT_ENABLED)) {
-          memory = resource.getMemory();
+          memory = (int) resource.getMemorySize();
         }
 
         if (conf.getBoolean(

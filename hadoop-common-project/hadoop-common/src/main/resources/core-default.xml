@@ -113,98 +113,24 @@
   </description>
 </property>
 
-<!-- 
-=== Multiple group mapping providers configuration sample === 
-  This sample illustrates a typical use case for CompositeGroupsMapping where
-Hadoop authentication uses MIT Kerberos which trusts an AD realm. In this case, service
-principals such as hdfs, mapred, hbase, hive, oozie and etc can be placed in In MIT Kerberos,
-but end users are just from the trusted AD. For the service principals, ShellBasedUnixGroupsMapping
-provider can be used to query their groups for efficiency, and for end users, LdapGroupsMapping 
-provider can be used. This avoids to add group entries in AD for service principals when only using 
-LdapGroupsMapping provider.
-  In case multiple ADs are involved and trusted by the MIT Kerberos in this use case, LdapGroupsMapping
-provider can be used more times with different AD specific configurations. This sample also shows how
-to do that. Here are the necessary configurations.
-
 <property>
-  <name>hadoop.security.group.mapping</name>
-  <value>org.apache.hadoop.security.CompositeGroupsMapping</value>
+  <name>hadoop.security.dns.log-slow-lookups.enabled</name>
+  <value>false</value>
   <description>
-    Class for user to group mapping (get groups for a given user) for ACL, which 
-    makes use of other multiple providers to provide the service.
+    Time name lookups (via SecurityUtil) and log them if they exceed the
+    configured threshold.
   </description>
 </property>
 
 <property>
-  <name>hadoop.security.group.mapping.providers</name>
-  <value>shell4services,ad4usersX,ad4usersY</value>
+  <name>hadoop.security.dns.log-slow-lookups.threshold.ms</name>
+  <value>1000</value>
   <description>
-    Comma separated of names of other providers to provide user to group mapping. 
+    If slow lookup logging is enabled, this threshold is used to decide if a
+    lookup is considered slow enough to be logged.
   </description>
 </property>
 
-<property>
-  <name>hadoop.security.group.mapping.providers.combined</name>
-  <value>true</value>
-  <description>
-    true or false to indicate whether groups from the providers are combined or not. The default value is true
-    If true, then all the providers will be tried to get groups and all the groups are combined to return as
-    the final results. Otherwise, providers are tried one by one in the configured list order, and if any
-    groups are retrieved from any provider, then the groups will be returned without trying the left ones.
-  </description>
-</property>
-
-<property>
-  <name>hadoop.security.group.mapping.provider.shell4services</name>
-  <value>org.apache.hadoop.security.ShellBasedUnixGroupsMapping</value>
-  <description>
-    Class for group mapping provider named by 'shell4services'. The name can then be referenced 
-    by hadoop.security.group.mapping.providers property.
-  </description>
-</property>
-
-<property>
-  <name>hadoop.security.group.mapping.provider.ad4usersX</name>
-  <value>org.apache.hadoop.security.LdapGroupsMapping</value>
-  <description>
-    Class for group mapping provider named by 'ad4usersX'. The name can then be referenced 
-    by hadoop.security.group.mapping.providers property.
-  </description>
-</property>
-
-<property>
-  <name>hadoop.security.group.mapping.provider.ad4usersY</name>
-  <value>org.apache.hadoop.security.LdapGroupsMapping</value>
-  <description>
-    Class for group mapping provider named by 'ad4usersY'. The name can then be referenced 
-    by hadoop.security.group.mapping.providers property.
-  </description>
-</property>
-
-<property>
-<name>hadoop.security.group.mapping.provider.ad4usersX.ldap.url</name>
-<value>ldap://ad-host-for-users-X:389</value>
-  <description>
-    ldap url for the provider named by 'ad4usersX'. Note this property comes from 
-    'hadoop.security.group.mapping.ldap.url'.
-  </description>
-</property>
-
-<property>
-<name>hadoop.security.group.mapping.provider.ad4usersY.ldap.url</name>
-<value>ldap://ad-host-for-users-Y:389</value>
-  <description>
-    ldap url for the provider named by 'ad4usersY'. Note this property comes from 
-    'hadoop.security.group.mapping.ldap.url'.
-  </description>
-</property>
-
-You also need to configure other properties like
-  hadoop.security.group.mapping.ldap.bind.password.file and etc.
-for ldap providers in the same way as above does.
-
--->
- 
 <property>
   <name>hadoop.security.groups.cache.secs</name>
   <value>300</value>
@@ -236,6 +162,30 @@ for ldap providers in the same way as above does.
   <description>
     If looking up a single user to group takes longer than this amount of
     milliseconds, we will log a warning message.
+  </description>
+</property>
+
+<property>
+  <name>hadoop.security.group.mapping.ldap.connection.timeout.ms</name>
+  <value>60000</value>
+  <description>
+    This property is the connection timeout (in milliseconds) for LDAP
+    operations. If the LDAP provider doesn't establish a connection within the
+    specified period, it will abort the connect attempt. Non-positive value
+    means no LDAP connection timeout is specified in which case it waits for the
+    connection to establish until the underlying network times out.
+  </description>
+</property>
+
+<property>
+  <name>hadoop.security.group.mapping.ldap.read.timeout.ms</name>
+  <value>60000</value>
+  <description>
+    This property is the read timeout (in milliseconds) for LDAP
+    operations. If the LDAP provider doesn't get a LDAP response within the
+    specified period, it will abort the read attempt. Non-positive value
+    means no read timeout is specified in which case it waits for the response
+    infinitely.
   </description>
 </property>
 
@@ -335,6 +285,18 @@ for ldap providers in the same way as above does.
 </property>
 
 <property>
+    <name>hadoop.security.group.mapping.ldap.search.attr.memberof</name>
+    <value></value>
+    <description>
+      The attribute of the user object that identifies its group objects. By
+      default, Hadoop makes two LDAP queries per user if this value is empty. If
+      set, Hadoop will attempt to resolve group names from this attribute,
+      instead of making the second LDAP query to get group objects. The value
+      should be 'memberOf' for an MS AD installation.
+    </description>
+</property>
+
+<property>
   <name>hadoop.security.group.mapping.ldap.search.attr.member</name>
   <value>member</value>
   <description>
@@ -379,6 +341,28 @@ for ldap providers in the same way as above does.
     maximum time limit when searching and awaiting a result.
     Set to 0 if infinite wait period is desired.
     Default is 10 seconds. Units in milliseconds.
+  </description>
+</property>
+
+<property>
+  <name>hadoop.security.group.mapping.providers</name>
+  <value></value>
+  <description>
+    Comma separated of names of other providers to provide user to group
+    mapping. Used by CompositeGroupsMapping.
+  </description>
+</property>
+
+<property>
+  <name>hadoop.security.group.mapping.providers.combined</name>
+  <value>true</value>
+  <description>
+    true or false to indicate whether groups from the providers are combined or
+    not. The default value is true. If true, then all the providers will be
+    tried to get groups and all the groups are combined to return as the final
+    results. Otherwise, providers are tried one by one in the configured list
+    order, and if any groups are retrieved from any provider, then the groups
+    will be returned without trying the left ones.
   </description>
 </property>
 
@@ -428,8 +412,8 @@ for ldap providers in the same way as above does.
 </property>
 
 <property>
-  <name>hadoop.work.around.non.threadsafe.getpwuid</name>
-  <value>false</value>
+  <name>hadoop.workaround.non.threadsafe.getpwuid</name>
+  <value>true</value>
   <description>Some operating systems or authentication modules are known to
   have broken implementations of getpwuid_r and getpwgid_r, such that these
   calls are not thread-safe. Symptoms of this problem include JVM crashes
@@ -558,6 +542,14 @@ for ldap providers in the same way as above does.
   </description>
 </property>
 
+<property>
+  <name>io.erasurecode.codec.rs-default.rawcoder</name>
+  <value>org.apache.hadoop.io.erasurecode.rawcoder.RSRawErasureCoderFactory</value>
+  <description>
+    Raw coder implementation for the rs-default codec.
+  </description>
+</property>
+
 <!-- file system properties -->
 
 <property>
@@ -682,6 +674,16 @@ for ldap providers in the same way as above does.
 </property>
 
 <property>
+  <name>fs.s3.awsAccessKeyId</name>
+  <description>AWS access key ID used by S3 block file system.</description>
+</property>
+
+<property>
+  <name>fs.s3.awsSecretAccessKey</name>
+  <description>AWS secret key used by S3 block file system.</description>
+</property>
+
+<property>
   <name>fs.s3.block.size</name>
   <value>67108864</value>
   <description>Block size to use when writing files to S3.</description>
@@ -690,7 +692,7 @@ for ldap providers in the same way as above does.
 <property>
   <name>fs.s3.buffer.dir</name>
   <value>${hadoop.tmp.dir}/s3</value>
-  <description>Determines where on the local filesystem the S3 filesystem
+  <description>Determines where on the local filesystem the s3:/s3n: filesystem
   should store files before sending them to S3
   (or after retrieving them from S3).
   </description>
@@ -725,6 +727,16 @@ for ldap providers in the same way as above does.
   behavior. This is an advanced option that should only be used by server applications
   requiring a more carefully orchestrated shutdown sequence.
   </description>
+</property>
+
+<property>
+  <name>fs.s3n.awsAccessKeyId</name>
+  <description>AWS access key ID used by S3 native file system.</description>
+</property>
+
+<property>
+  <name>fs.s3n.awsSecretAccessKey</name>
+  <description>AWS secret key used by S3 native file system.</description>
 </property>
 
 <property>
@@ -763,18 +775,39 @@ for ldap providers in the same way as above does.
   <name>fs.s3n.server-side-encryption-algorithm</name>
   <value></value>
   <description>Specify a server-side encryption algorithm for S3.
-  The default is NULL, and the only other currently allowable value is AES256.
+  Unset by default, and the only other currently allowable value is AES256.
   </description>
 </property>
 
 <property>
-  <name>fs.s3a.awsAccessKeyId</name>
-  <description>AWS access key ID. Omit for Role-based authentication.</description>
+  <name>fs.s3a.access.key</name>
+  <description>AWS access key ID used by S3A file system. Omit for IAM role-based or provider-based authentication.</description>
 </property>
 
 <property>
-  <name>fs.s3a.awsSecretAccessKey</name>
-  <description>AWS secret key. Omit for Role-based authentication.</description>
+  <name>fs.s3a.secret.key</name>
+  <description>AWS secret key used by S3A file system. Omit for IAM role-based or provider-based authentication.</description>
+</property>
+
+<property>
+  <name>fs.s3a.aws.credentials.provider</name>
+  <description>
+    Class name of a credentials provider that implements
+    com.amazonaws.auth.AWSCredentialsProvider.  Omit if using access/secret keys
+    or another authentication mechanism.  The specified class must provide an
+    accessible constructor accepting java.net.URI and
+    org.apache.hadoop.conf.Configuration, or an accessible default constructor.
+    Specifying org.apache.hadoop.fs.s3a.AnonymousAWSCredentialsProvider allows
+    anonymous access to a publicly accessible S3 bucket without any credentials.
+    Please note that allowing anonymous access to an S3 bucket compromises
+    security and therefore is unsuitable for most use cases.  It can be useful
+    for accessing public data sets without requiring AWS credentials.
+  </description>
+</property>
+
+<property>
+  <name>fs.s3a.session.token</name>
+  <description>The session token used with temporary credentials. Used only with provider org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider.</description>
 </property>
 
 <property>
@@ -794,6 +827,13 @@ for ldap providers in the same way as above does.
   <description>AWS S3 endpoint to connect to. An up-to-date list is
     provided in the AWS Documentation: regions and endpoints. Without this
     property, the standard region (s3.amazonaws.com) is assumed.
+  </description>
+</property>
+
+<property>
+  <name>fs.s3a.path.style.access</name>
+  <description>Enable S3 path style access ie disabling the default virtual hosting behaviour.
+    Useful for S3A-compliant storage providers as it removes the need to set up DNS for virtual hosting.
   </description>
 </property>
 
@@ -884,7 +924,19 @@ for ldap providers in the same way as above does.
 <property>
   <name>fs.s3a.multipart.threshold</name>
   <value>2147483647</value>
-  <description>Threshold before uploads or copies use parallel multipart operations.</description>
+  <description>How big (in bytes) to split upload or copy operations up into.
+    This also controls the partition size in renamed files, as rename() involves
+    copying the source file(s)
+  </description>
+</property>
+
+<property>
+  <name>fs.s3a.multiobjectdelete.enable</name>
+  <value>true</value>
+  <description>When enabled, multiple single-object delete requests are replaced by
+    a single 'delete multiple objects'-request, reducing the number of requests.
+    Beware: legacy S3-compatible object stores might not support this request.
+  </description>
 </property>
 
 <property>
@@ -908,9 +960,23 @@ for ldap providers in the same way as above does.
 </property>
 
 <property>
+  <name>fs.s3a.server-side-encryption-algorithm</name>
+  <description>Specify a server-side encryption algorithm for s3a: file system.
+    Unset by default, and the only other currently allowable value is AES256.
+  </description>
+</property>
+
+<property>
   <name>fs.s3a.signing-algorithm</name>
   <description>Override the default signing algorithm so legacy
     implementations can still be used</description>
+</property>
+
+<property>
+  <name>fs.s3a.block.size</name>
+  <value>33554432</value>
+  <description>Block size to use when reading files using s3a: file system.
+  </description>
 </property>
 
 <property>
@@ -929,11 +995,34 @@ for ldap providers in the same way as above does.
     uploading (fs.s3a.threads.max) or queueing (fs.s3a.max.total.tasks)</description>
 </property>
 
-  <property>
+<property>
+  <name>fs.s3a.readahead.range</name>
+  <value>65536</value>
+  <description>Bytes to read ahead during a seek() before closing and
+  re-opening the S3 HTTP connection. This option will be overridden if
+  any call to setReadahead() is made to an open stream.</description>
+</property>
+
+<property>
   <name>fs.s3a.fast.buffer.size</name>
   <value>1048576</value>
   <description>Size of initial memory buffer in bytes allocated for an
     upload. No effect if fs.s3a.fast.upload is false.</description>
+</property>
+
+<property>
+  <name>fs.s3a.user.agent.prefix</name>
+  <value></value>
+  <description>
+    Sets a custom value that will be prepended to the User-Agent header sent in
+    HTTP requests to the S3 back-end by S3AFileSystem.  The User-Agent header
+    always includes the Hadoop version number followed by a string generated by
+    the AWS SDK.  An example is "User-Agent: Hadoop 2.8.0, aws-sdk-java/1.10.6".
+    If this optional property is set, then its value is prepended to create a
+    customized User-Agent.  For example, if this configuration property was set
+    to "MyApp", then an example of the resulting User-Agent would be
+    "User-Agent: MyApp, Hadoop 2.8.0, aws-sdk-java/1.10.6".
+  </description>
 </property>
 
 <property>
@@ -1077,7 +1166,7 @@ for ldap providers in the same way as above does.
   <value>true</value>
   <description>Send a ping to the server when timeout on reading the response,
   if set to true. If no failure is detected, the client retries until at least
-  a byte is read.
+  a byte is read or the time given by ipc.client.rpc-timeout.ms is passed.
   </description>
 </property>
 
@@ -1094,10 +1183,9 @@ for ldap providers in the same way as above does.
   <name>ipc.client.rpc-timeout.ms</name>
   <value>0</value>
   <description>Timeout on waiting response from server, in milliseconds.
-  Currently this timeout works only when ipc.client.ping is set to true
-  because it uses the same facilities with IPC ping.
-  The timeout overrides the ipc.ping.interval and client will throw exception
-  instead of sending ping when the interval is passed.
+  If ipc.client.ping is set to true and this rpc-timeout is greater than
+  the value of ipc.ping.interval, the effective value of the rpc-timeout is
+  rounded up to multiple of ipc.ping.interval.
   </description>
 </property>
 
@@ -1116,6 +1204,17 @@ for ldap providers in the same way as above does.
      various services. If this value is set to true then we log requests that
      fall into 99th percentile as well as increment RpcSlowCalls counter.
     </description>
+</property>
+
+<property>
+  <name>ipc.maximum.data.length</name>
+  <value>67108864</value>
+  <description>This indicates the maximum IPC message length (bytes) that can be
+    accepted by the server. Messages larger than this value are rejected by
+    server immediately. This setting should rarely need to be changed. It merits
+    investigating whether the cause of long RPC messages can be fixed instead,
+    e.g. by splitting into smaller messages.
+  </description>
 </property>
 
 <!-- Proxy Configuration -->
@@ -1600,7 +1699,7 @@ for ldap providers in the same way as above does.
   <value>DEFAULT</value>
   <description>
     The hostname verifier to provide for HttpsURLConnections.
-    Valid values are: DEFAULT, STRICT, STRICT_I6, DEFAULT_AND_LOCALHOST and
+    Valid values are: DEFAULT, STRICT, STRICT_IE6, DEFAULT_AND_LOCALHOST and
     ALLOW_ALL
   </description>
 </property>
@@ -1635,9 +1734,9 @@ for ldap providers in the same way as above does.
 
 <property>
   <name>hadoop.ssl.enabled.protocols</name>
-  <value>TLSv1</value>
+  <value>TLSv1,SSLv2Hello,TLSv1.1,TLSv1.2</value>
   <description>
-    Protocols supported by the ssl.
+    The supported SSL protocols.
   </description>
 </property>
 
@@ -2101,4 +2200,77 @@ for ldap providers in the same way as above does.
     <name>hadoop.http.logs.enabled</name>
     <value>true</value>
   </property>
+
+  <property>
+    <name>fs.client.resolve.topology.enabled</name>
+    <value>false</value>
+    <description>Whether the client machine will use the class specified by
+      property net.topology.node.switch.mapping.impl to compute the network
+      distance between itself and remote machines of the FileSystem. Additional
+      properties might need to be configured depending on the class specified
+      in net.topology.node.switch.mapping.impl. For example, if
+      org.apache.hadoop.net.ScriptBasedMapping is used, a valid script file
+      needs to be specified in net.topology.script.file.name.
+    </description>
+  </property>
+
+
+  <!-- Azure Data Lake File System Configurations -->
+
+  <property>
+    <name>adl.feature.override.readahead</name>
+    <value>true</value>
+    <description>
+      Enables read aheads in the ADL client, the feature is used to
+      improve read throughput.
+      This works in conjunction with the value set in
+      adl.feature.override.readahead.max.buffersize.
+      When set to false the read ahead feature is turned off.
+      Default : True if not configured.
+    </description>
+  </property>
+
+  <property>
+    <name>adl.feature.override.readahead.max.buffersize</name>
+    <value>8388608</value>
+    <description>
+      Define maximum buffer size to cache read ahead data, this is
+      allocated per process to
+      cache read ahead data. Applicable only when
+      adl.feature.override.readahead is set to true.
+      Default : 8388608 Byte i.e. 8MB if not configured.
+    </description>
+  </property>
+
+  <property>
+    <name>adl.feature.override.readahead.max.concurrent.connection</name>
+    <value>2</value>
+    <description>
+      Define maximum concurrent connection can be established to
+      read ahead. If the data size is less than 4MB then only 1 read n/w
+      connection
+      is set. If the data size is less than 4MB but less than 8MB then 2 read
+      n/w connection
+      is set. Data greater than 8MB then value set under the property would
+      take
+      effect. Applicable only when adl.feature.override.readahead is set
+      to true and buffer size is greater than 8MB.
+      It is recommended to reset this property if the
+      adl.feature.override.readahead.max.buffersize
+      is less than 8MB to gain performance. Application has to consider
+      throttling limit for the account as well before configuring large
+      buffer size.
+    </description>
+  </property>
+
+  <property>
+    <name>fs.adl.impl</name>
+    <value>org.apache.hadoop.fs.adl.AdlFileSystem</value>
+  </property>
+
+  <property>
+    <name>fs.AbstractFileSystem.adl.impl</name>
+    <value>org.apache.hadoop.fs.adl.Adl</value>
+  </property>
+
 </configuration>

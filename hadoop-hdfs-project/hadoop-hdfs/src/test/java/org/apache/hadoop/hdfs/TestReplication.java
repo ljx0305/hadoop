@@ -54,6 +54,7 @@ import org.apache.hadoop.hdfs.server.blockmanagement.BlockManagerTestUtil;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
 import org.apache.hadoop.hdfs.server.datanode.FsDatasetTestUtils.MaterializedReplica;
+import org.apache.hadoop.hdfs.server.datanode.InternalDataNodeTestUtils;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
@@ -410,7 +411,7 @@ public class TestReplication {
       LOG.info("Restarting minicluster after deleting a replica and corrupting 2 crcs");
       conf = new HdfsConfiguration();
       conf.set(DFSConfigKeys.DFS_REPLICATION_KEY, Integer.toString(numDataNodes));
-      conf.set(DFSConfigKeys.DFS_NAMENODE_REPLICATION_PENDING_TIMEOUT_SEC_KEY, Integer.toString(2));
+      conf.set(DFSConfigKeys.DFS_NAMENODE_RECONSTRUCTION_PENDING_TIMEOUT_SEC_KEY, Integer.toString(2));
       conf.set("dfs.datanode.block.write.timeout.sec", Integer.toString(5));
       conf.set(DFSConfigKeys.DFS_NAMENODE_SAFEMODE_THRESHOLD_PCT_KEY, "0.75f"); // only 3 copies exist
       
@@ -507,8 +508,9 @@ public class TestReplication {
     try {
       Configuration conf = new HdfsConfiguration();
       conf.setLong(
-          DFSConfigKeys.DFS_NAMENODE_REPLICATION_PENDING_TIMEOUT_SEC_KEY, 1);
-      cluster = new MiniDFSCluster.Builder(conf).numDataNodes(3).build();
+          DFSConfigKeys.DFS_NAMENODE_RECONSTRUCTION_PENDING_TIMEOUT_SEC_KEY, 1);
+      cluster = new MiniDFSCluster.Builder(conf).numDataNodes(3)
+          .storagesPerDatanode(1).build();
       FileSystem fs = cluster.getFileSystem();
       Path filePath = new Path("/test");
       FSDataOutputStream create = fs.create(filePath);
@@ -570,7 +572,7 @@ public class TestReplication {
       NameNode nn = cluster.getNameNode();
       DataNode dn = cluster.getDataNodes().get(0);
       DatanodeProtocolClientSideTranslatorPB spy =
-          DataNodeTestUtils.spyOnBposToNN(dn, nn);
+          InternalDataNodeTestUtils.spyOnBposToNN(dn, nn);
       DelayAnswer delayer = new GenericTestUtils.DelayAnswer(LOG);
       Mockito.doAnswer(delayer).when(spy).blockReceivedAndDeleted(
           Mockito.<DatanodeRegistration>anyObject(),
@@ -686,7 +688,7 @@ public class TestReplication {
 
   private long pendingReplicationCount(BlockManager bm) {
     BlockManagerTestUtil.updateState(bm);
-    return bm.getPendingReplicationBlocksCount();
+    return bm.getPendingReconstructionBlocksCount();
   }
 
   private void assertNoReplicationWasPerformed(MiniDFSCluster cluster) {

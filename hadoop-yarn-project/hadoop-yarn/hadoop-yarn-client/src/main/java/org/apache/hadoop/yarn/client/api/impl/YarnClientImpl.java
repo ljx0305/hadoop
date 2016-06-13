@@ -65,6 +65,8 @@ import org.apache.hadoop.yarn.api.protocolrecords.GetDelegationTokenResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetLabelsToNodesRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNewApplicationRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNewApplicationResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.GetNewReservationRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.GetNewReservationResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNodesToLabelsRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetQueueInfoRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetQueueUserAclsInfoRequest;
@@ -73,6 +75,8 @@ import org.apache.hadoop.yarn.api.protocolrecords.KillApplicationResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.MoveApplicationAcrossQueuesRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationDeleteRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationDeleteResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.ReservationListRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.ReservationListResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationSubmissionRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationSubmissionResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationUpdateRequest;
@@ -787,6 +791,14 @@ public class YarnClientImpl extends YarnClient {
   }
 
   @Override
+  public GetNewReservationResponse createReservation() throws YarnException,
+      IOException {
+    GetNewReservationRequest request =
+        Records.newRecord(GetNewReservationRequest.class);
+    return rmClient.getNewReservation(request);
+  }
+
+  @Override
   public ReservationSubmissionResponse submitReservation(
       ReservationSubmissionRequest request) throws YarnException, IOException {
     return rmClient.submitReservation(request);
@@ -803,7 +815,13 @@ public class YarnClientImpl extends YarnClient {
       ReservationDeleteRequest request) throws YarnException, IOException {
     return rmClient.deleteReservation(request);
   }
-  
+
+  @Override
+  public ReservationListResponse listReservations(
+          ReservationListRequest request) throws YarnException, IOException {
+    return rmClient.listReservations(request);
+  }
+
   @Override
   public Map<NodeId, Set<NodeLabel>> getNodeToLabels() throws YarnException,
       IOException {
@@ -840,12 +858,12 @@ public class YarnClientImpl extends YarnClient {
   }
 
   @Override
-  public void signalContainer(ContainerId containerId,
+  public void signalToContainer(ContainerId containerId,
       SignalContainerCommand command)
           throws YarnException, IOException {
     LOG.info("Signalling container " + containerId + " with command " + command);
     SignalContainerRequest request =
         SignalContainerRequest.newInstance(containerId, command);
-    rmClient.signalContainer(request);
+    rmClient.signalToContainer(request);
   }
 }

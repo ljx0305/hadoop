@@ -49,38 +49,44 @@
 # preferred.  Many sites configure these options outside of Hadoop,
 # such as in /etc/profile.d
 
-# The java implementation to use. By default, this environment 
+# The java implementation to use. By default, this environment
 # variable is REQUIRED on ALL platforms except OS X!
 # export JAVA_HOME=
 
 # Location of Hadoop.  By default, Hadoop will attempt to determine
 # this location based upon its execution path.
-# export HADOOP_PREFIX=
+# export HADOOP_HOME=
 
 # Location of Hadoop's configuration information.  i.e., where this
 # file is probably living. Many sites will also set this in the
 # same location where JAVA_HOME is defined.  If this is not defined
 # Hadoop will attempt to locate it based upon its execution
 # path.
-# export HADOOP_CONF_DIR=$HADOOP_PREFIX/etc/hadoop
+# export HADOOP_CONF_DIR=${HADOOP_HOME}/etc/hadoop
 
-# The maximum amount of heap to use (Java -Xmx).  If no unit 
-# is provided, it will be converted to MB.  Daemons will 
+# The maximum amount of heap to use (Java -Xmx).  If no unit
+# is provided, it will be converted to MB.  Daemons will
 # prefer any Xmx setting in their respective _OPT variable.
 # There is no default; the JVM will autoscale based upon machine
 # memory size.
 # export HADOOP_HEAPSIZE_MAX=
 
-# The minimum amount of heap to use (Java -Xms).  If no unit 
-# is provided, it will be converted to MB.  Daemons will 
+# The minimum amount of heap to use (Java -Xms).  If no unit
+# is provided, it will be converted to MB.  Daemons will
 # prefer any Xms setting in their respective _OPT variable.
 # There is no default; the JVM will autoscale based upon machine
 # memory size.
 # export HADOOP_HEAPSIZE_MIN=
 
+# Enable extra debugging of Hadoop's JAAS binding, used to set up
+# Kerberos security.
+# export HADOOP_JAAS_DEBUG=true
+
 # Extra Java runtime options for all Hadoop commands. We don't support
 # IPv6 yet/still, so by default the preference is set to IPv4.
 # export HADOOP_OPTS="-Djava.net.preferIPv4Stack=true"
+# For Kerberos debugging, an extended option set logs more invormation
+# export HADOOP_OPTS="-Djava.net.preferIPv4Stack=true -Dsun.security.krb5.debug=true -Dsun.security.spnego.debug"
 
 # Some parts of the shell code may do special things dependent upon
 # the operating system.  We have to set this here. See the next
@@ -101,8 +107,8 @@ case ${HADOOP_OS_TYPE} in
 esac
 
 # Extra Java runtime options for some Hadoop commands
-# and clients (i.e., hdfs dfs -blah).  These get appended to HADOOP_OPTS for 
-# such commands.  In most cases, # this should be left empty and 
+# and clients (i.e., hdfs dfs -blah).  These get appended to HADOOP_OPTS for
+# such commands.  In most cases, # this should be left empty and
 # let users supply it on the command line.
 # export HADOOP_CLIENT_OPTS=""
 
@@ -140,6 +146,11 @@ esac
 # names starting with a '-' are treated as negative matches. For example,
 # export HADOOP_CLIENT_CLASSLOADER_SYSTEM_CLASSES="-org.apache.hadoop.UserClass,java.,javax.,org.apache.hadoop."
 
+# Enable optional, bundled Hadoop features
+# This is a comma delimited list.  It may NOT be overridden via .hadooprc
+# Entries may be added/removed as needed.
+# export HADOOP_OPTIONAL_TOOLS="@@@HADOOP_OPTIONAL_TOOLS@@@"
+
 ###
 # Options for remote shell connectivity
 ###
@@ -175,10 +186,10 @@ esac
 # non-secure)
 #
 
-# Where (primarily) daemon log files are stored.  # $HADOOP_PREFIX/logs 
-# by default.
+# Where (primarily) daemon log files are stored.
+# ${HADOOP_HOME}/logs by default.
 # Java property: hadoop.log.dir
-# export HADOOP_LOG_DIR=${HADOOP_PREFIX}/logs
+# export HADOOP_LOG_DIR=${HADOOP_HOME}/logs
 
 # A string representing this instance of hadoop. $USER by default.
 # This is used in writing log and pid files, so keep that in mind!
@@ -195,7 +206,7 @@ esac
 # Java property: hadoop.root.logger
 # export HADOOP_ROOT_LOGGER=INFO,console
 
-# Default log4j setting for daemons spawned explicitly by 
+# Default log4j setting for daemons spawned explicitly by
 # --daemon option of hadoop, hdfs, mapred and yarn command.
 # Java property: hadoop.root.logger
 # export HADOOP_DAEMON_ROOT_LOGGER=INFO,RFA

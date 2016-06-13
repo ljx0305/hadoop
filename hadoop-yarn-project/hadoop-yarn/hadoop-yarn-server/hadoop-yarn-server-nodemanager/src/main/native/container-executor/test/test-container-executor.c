@@ -236,12 +236,14 @@ void test_check_user(int expectedFailure) {
 
 void test_resolve_config_path() {
   printf("\nTesting resolve_config_path\n");
-  if (strcmp(resolve_config_path("/bin/ls", NULL), "/bin/ls") != 0) {
-    printf("FAIL: failed to resolve config_name on an absolute path name: /bin/ls\n");
+  if (strcmp(resolve_config_path(TEST_ROOT, NULL), TEST_ROOT) != 0) {
+    printf("FAIL: failed to resolve config_name on an absolute path name: "
+           TEST_ROOT "\n");
     exit(1);
   }
-  if (strcmp(resolve_config_path("../bin/ls", "/bin/ls"), "/bin/ls") != 0) {
-    printf("FAIL: failed to resolve config_name on a relative path name: ../bin/ls (relative to /bin/ls)");
+  if (strcmp(resolve_config_path(".." TEST_ROOT, TEST_ROOT), TEST_ROOT) != 0) {
+    printf("FAIL: failed to resolve config_name on a relative path name: "
+           ".." TEST_ROOT " (relative to " TEST_ROOT ")");
     exit(1);
   }
 }
@@ -464,54 +466,6 @@ void run_test_in_child(const char* test_name, void (*func)()) {
     if (WEXITSTATUS(status) != 0) {
       printf("FAIL: child %" PRId64 " exited with bad status %d\n",
 	     (int64_t)child, WEXITSTATUS(status));
-      exit(1);
-    }
-  }
-}
-
-void test_signal_container() {
-  sigset_t set;
-
-  // unblock SIGQUIT
-  sigemptyset(&set);
-  sigaddset(&set, SIGQUIT);
-  sigprocmask(SIG_UNBLOCK, &set, NULL);
-
-  printf("\nTesting signal_container\n");
-  fflush(stdout);
-  fflush(stderr);
-  pid_t child = fork();
-  if (child == -1) {
-    printf("FAIL: fork failed\n");
-    exit(1);
-  } else if (child == 0) {
-    printf("\nSwitching to user %d\n", user_detail->pw_uid);
-    if (change_user(user_detail->pw_uid, user_detail->pw_gid) != 0) {
-      exit(1);
-    }
-    sleep(3600);
-    exit(0);
-  } else {
-    printf("Child container launched as %" PRId64 "\n", (int64_t)child);
-    printf("Signaling container as user %s\n", yarn_username);
-    // there's a race condition for child calling change_user and us
-    // calling signal_container_as_user, hence sleeping
-    sleep(3);
-    if (signal_container_as_user(yarn_username, child, SIGQUIT) != 0) {
-      exit(1);
-    }
-    int status = 0;
-    if (waitpid(child, &status, 0) == -1) {
-      printf("FAIL: waitpid failed - %s\n", strerror(errno));
-      exit(1);
-    }
-    if (!WIFSIGNALED(status)) {
-      printf("FAIL: child wasn't signalled - %d\n", status);
-      exit(1);
-    }
-    if (WTERMSIG(status) != SIGQUIT) {
-      printf("FAIL: child was killed with %d instead of %d\n", 
-	     WTERMSIG(status), SIGQUIT);
       exit(1);
     }
   }
@@ -748,6 +702,100 @@ void test_run_container() {
   check_pid_file(cgroups_pids[1], child);
 }
 
+static void mkdir_or_die(const char *path) {
+  if (mkdir(path, 0777) < 0) {
+    int err = errno;
+    printf("mkdir(%s) failed: %s\n", path, strerror(err));
+    exit(1);
+  }
+}
+
+static void touch_or_die(const char *path) {
+  FILE* f = fopen(path, "w");
+  if (!f) {
+    int err = errno;
+    printf("fopen(%s, w) failed: %s\n", path, strerror(err));
+    exit(1);
+  }
+  if (fclose(f) < 0) {
+    int err = errno;
+    printf("fclose(%s) failed: %s\n", path, strerror(err));
+    exit(1);
+  }
+}
+
+static void symlink_or_die(const char *old, const char *new) {
+  if (symlink(old, new) < 0) {
+    int err = errno;
+    printf("symlink(%s, %s) failed: %s\n", old, new, strerror(err));
+    exit(1);
+  }
+}
+
+static void expect_type(const char *path, int mode) {
+  struct stat st_buf;
+
+  if (stat(path, &st_buf) < 0) {
+    int err = errno;
+    if (err == ENOENT) {
+      if (mode == 0) {
+        return;
+      }
+      printf("expect_type(%s): stat failed unexpectedly: %s\n",
+             path, strerror(err));
+      exit(1);
+    }
+  }
+  if (mode == 0) {
+    printf("expect_type(%s): we expected the file to be gone, but it "
+           "existed.\n", path);
+    exit(1);
+  }
+  if (!(st_buf.st_mode & mode)) {
+    printf("expect_type(%s): the file existed, but it had mode 0%4o, "
+           "which didn't have bit 0%4o\n", path, st_buf.st_mode, mode);
+    exit(1);
+  }
+}
+
+int recursive_unlink_children(const char *name);
+
+void test_recursive_unlink_children() {
+  int ret;
+
+  mkdir_or_die(TEST_ROOT "/unlinkRoot");
+  mkdir_or_die(TEST_ROOT "/unlinkRoot/a");
+  touch_or_die(TEST_ROOT "/unlinkRoot/b");
+  mkdir_or_die(TEST_ROOT "/unlinkRoot/c");
+  touch_or_die(TEST_ROOT "/unlinkRoot/c/d");
+  touch_or_die(TEST_ROOT "/external");
+  symlink_or_die(TEST_ROOT "/external",
+                 TEST_ROOT "/unlinkRoot/c/external");
+  ret = recursive_unlink_children(TEST_ROOT "/unlinkRoot");
+  if (ret != 0) {
+    printf("recursive_unlink_children(%s) failed: error %d\n",
+           TEST_ROOT "/unlinkRoot", ret);
+    exit(1);
+  }
+  // unlinkRoot should still exist.
+  expect_type(TEST_ROOT "/unlinkRoot", S_IFDIR);
+  // Other files under unlinkRoot should have been deleted.
+  expect_type(TEST_ROOT "/unlinkRoot/a", 0);
+  expect_type(TEST_ROOT "/unlinkRoot/b", 0);
+  expect_type(TEST_ROOT "/unlinkRoot/c", 0);
+  // We shouldn't have followed the symlink.
+  expect_type(TEST_ROOT "/external", S_IFREG);
+  // Clean up.
+  if (rmdir(TEST_ROOT "/unlinkRoot") < 0) {
+    int err = errno;
+    printf("failed to rmdir " TEST_ROOT "/unlinkRoot: %s\n", strerror(err));
+  }
+  if (unlink(TEST_ROOT "/external") < 0) {
+    int err = errno;
+    printf("failed to unlink " TEST_ROOT "/external: %s\n", strerror(err));
+  }
+}
+
 // This test is expected to be executed either by a regular
 // user or by root. If executed by a regular user it doesn't
 // test all the functions that would depend on changing the
@@ -773,11 +821,11 @@ int main(int argc, char **argv) {
   if (mkdirs(TEST_ROOT "/logs/userlogs", 0755) != 0) {
     exit(1);
   }
-  
+
   if (write_config_file(TEST_ROOT "/test.cfg", 1) != 0) {
     exit(1);
   }
-  read_config(TEST_ROOT "/test.cfg");
+  read_executor_config(TEST_ROOT "/test.cfg");
 
   local_dirs = extract_values(strdup(NM_LOCAL_DIRS));
   log_dirs = extract_values(strdup(NM_LOG_DIRS));
@@ -801,6 +849,9 @@ int main(int argc, char **argv) {
   }
 
   printf("\nStarting tests\n");
+
+  printf("\nTesting recursive_unlink_children()\n");
+  test_recursive_unlink_children();
 
   printf("\nTesting resolve_config_path()\n");
   test_resolve_config_path();
@@ -832,7 +883,6 @@ int main(int argc, char **argv) {
 
   // the tests that change user need to be run in a subshell, so that
   // when they change user they don't give up our privs
-  run_test_in_child("test_signal_container", test_signal_container);
   run_test_in_child("test_signal_container_group", test_signal_container_group);
 
   // init app and run container can't be run if you aren't testing as root
@@ -846,14 +896,14 @@ int main(int argc, char **argv) {
   seteuid(0);
   // test_delete_user must run as root since that's how we use the delete_as_user
   test_delete_user();
-  free_configurations();
+  free_executor_configurations();
 
   printf("\nTrying banned default user()\n");
   if (write_config_file(TEST_ROOT "/test.cfg", 0) != 0) {
     exit(1);
   }
 
-  read_config(TEST_ROOT "/test.cfg");
+  read_executor_config(TEST_ROOT "/test.cfg");
   username = "bin";
   test_check_user(1);
 
@@ -864,6 +914,6 @@ int main(int argc, char **argv) {
   printf("\nFinished tests\n");
 
   free(current_username);
-  free_configurations();
+  free_executor_configurations();
   return 0;
 }

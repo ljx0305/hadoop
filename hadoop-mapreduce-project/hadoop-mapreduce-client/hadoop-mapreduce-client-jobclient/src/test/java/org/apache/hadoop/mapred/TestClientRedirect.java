@@ -96,6 +96,8 @@ import org.apache.hadoop.yarn.api.protocolrecords.GetLabelsToNodesRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetLabelsToNodesResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNewApplicationRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNewApplicationResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.GetNewReservationRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.GetNewReservationResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNodesToLabelsRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNodesToLabelsResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetQueueInfoRequest;
@@ -110,6 +112,8 @@ import org.apache.hadoop.yarn.api.protocolrecords.RenewDelegationTokenRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.RenewDelegationTokenResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationDeleteRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationDeleteResponse;
+import org.apache.hadoop.yarn.api.protocolrecords.ReservationListRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.ReservationListResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationSubmissionRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationSubmissionResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.ReservationUpdateRequest;
@@ -422,6 +426,12 @@ public class TestClientRedirect {
     }
 
     @Override
+    public GetNewReservationResponse getNewReservation(
+        GetNewReservationRequest request) throws YarnException, IOException {
+      return null;
+    }
+
+    @Override
     public ReservationSubmissionResponse submitReservation(
         ReservationSubmissionRequest request) throws YarnException, IOException {
       return null;
@@ -436,6 +446,12 @@ public class TestClientRedirect {
     @Override
     public ReservationDeleteResponse deleteReservation(
         ReservationDeleteRequest request) throws YarnException, IOException {
+      return null;
+    }
+
+    @Override
+    public ReservationListResponse listReservations(
+            ReservationListRequest request) throws YarnException, IOException {
       return null;
     }
 
@@ -465,7 +481,7 @@ public class TestClientRedirect {
     }
 
     @Override
-    public SignalContainerResponse signalContainer(
+    public SignalContainerResponse signalToContainer(
         SignalContainerRequest request) throws IOException {
       return null;
     }

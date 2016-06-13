@@ -63,7 +63,7 @@ public class TestQuota {
   throws Exception {
     int val = admin.run(args);
     if (expectEror) {
-      assertEquals(val, -1);
+      assertEquals(-1, val);
     } else {
       assertTrue(val>=0);
     }
@@ -263,7 +263,7 @@ public class TestQuota {
       // 16a: set the quota of /test to be 0
       args = new String[]{"-setQuota", "0", parent.toString()};
       runCommand(admin, args, true);
-      runCommand(admin, true, "-setSpaceQuota", "0", args[2]);
+      runCommand(admin, false, "-setSpaceQuota", "0", args[2]);
       
       // 16b: set the quota of /test to be -1
       args[1] = "-1";
@@ -1105,7 +1105,7 @@ public class TestQuota {
   @Test
   public void testSetSpaceQuotaWhenStorageTypeIsWrong() throws Exception {
     Configuration conf = new HdfsConfiguration();
-    conf.set(FS_DEFAULT_NAME_KEY, "hdfs://127.0.0.1:8020");
+    conf.set(FS_DEFAULT_NAME_KEY, "hdfs://127.0.0.1:9820");
     DFSAdmin admin = new DFSAdmin(conf);
     ByteArrayOutputStream err = new ByteArrayOutputStream();
     PrintStream oldErr = System.err;

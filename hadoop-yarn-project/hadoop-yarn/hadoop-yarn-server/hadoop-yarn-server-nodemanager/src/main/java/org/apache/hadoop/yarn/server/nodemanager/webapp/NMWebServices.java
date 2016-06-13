@@ -33,10 +33,11 @@ import javax.ws.rs.QueryParam;
 import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+import javax.ws.rs.core.Response.ResponseBuilder;
 import javax.ws.rs.core.Response.Status;
 import javax.ws.rs.core.StreamingOutput;
 import javax.ws.rs.core.UriInfo;
-
+import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.classification.InterfaceAudience.Public;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
@@ -58,7 +59,7 @@ import org.apache.hadoop.yarn.util.ConverterUtils;
 import org.apache.hadoop.yarn.webapp.BadRequestException;
 import org.apache.hadoop.yarn.webapp.NotFoundException;
 import org.apache.hadoop.yarn.webapp.WebApp;
-
+import org.apache.hadoop.yarn.webapp.util.WebAppUtils;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 
@@ -143,10 +144,7 @@ public class NMWebServices {
   @Produces({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
   public AppInfo getNodeApp(@PathParam("appid") String appId) {
     init();
-    ApplicationId id = ConverterUtils.toApplicationId(recordFactory, appId);
-    if (id == null) {
-      throw new NotFoundException("app with id " + appId + " not found");
-    }
+    ApplicationId id = WebAppUtils.parseApplicationId(recordFactory, appId);
     Application app = this.nmContext.getApplications().get(id);
     if (app == null) {
       throw new NotFoundException("app with id " + appId + " not found");
@@ -208,6 +206,10 @@ public class NMWebServices {
    *    The container ID
    * @param filename
    *    The name of the log file
+   * @param format
+   *    The content type
+   * @param size
+   *    the size of the log file
    * @return
    *    The contents of the container's log file
    */
@@ -217,7 +219,9 @@ public class NMWebServices {
   @Public
   @Unstable
   public Response getLogs(@PathParam("containerid") String containerIdStr,
-      @PathParam("filename") String filename) {
+      @PathParam("filename") String filename,
+      @QueryParam("format") String format,
+      @QueryParam("size") String size) {
     ContainerId containerId;
     try {
       containerId = ConverterUtils.toContainerId(containerIdStr);
@@ -234,28 +238,85 @@ public class NMWebServices {
     } catch (YarnException ex) {
       return Response.serverError().entity(ex.getMessage()).build();
     }
-    
+    final long bytes = parseLongParam(size);
+    String contentType = WebAppUtils.getDefaultLogContentType();
+    if (format != null && !format.isEmpty()) {
+      contentType = WebAppUtils.getSupportedLogContentType(format);
+      if (contentType == null) {
+        String errorMessage = "The valid values for the parameter : format "
+            + "are " + WebAppUtils.listSupportedLogContentType();
+        return Response.status(Status.BAD_REQUEST).entity(errorMessage)
+            .build();
+      }
+    }
+
     try {
       final FileInputStream fis = ContainerLogsUtils.openLogFileForRead(
           containerIdStr, logFile, nmContext);
-      
+      final long fileLength = logFile.length();
+
       StreamingOutput stream = new StreamingOutput() {
         @Override
         public void write(OutputStream os) throws IOException,
             WebApplicationException {
-          int bufferSize = 65536;
-          byte[] buf = new byte[bufferSize];
-          int len;
-          while ((len = fis.read(buf, 0, bufferSize)) > 0) {
-            os.write(buf, 0, len);
+          try {
+            int bufferSize = 65536;
+            byte[] buf = new byte[bufferSize];
+            long toSkip = 0;
+            long totalBytesToRead = fileLength;
+            if (bytes < 0) {
+              long absBytes = Math.abs(bytes);
+              if (absBytes < fileLength) {
+                toSkip = fileLength - absBytes;
+                totalBytesToRead = absBytes;
+              }
+              long skippedBytes = fis.skip(toSkip);
+              if (skippedBytes != toSkip) {
+                throw new IOException("The bytes were skipped are different "
+                    + "from the caller requested");
+              }
+            } else {
+              if (bytes < fileLength) {
+                totalBytesToRead = bytes;
+              }
+            }
+
+            long curRead = 0;
+            long pendingRead = totalBytesToRead - curRead;
+            int toRead = pendingRead > buf.length ? buf.length
+                : (int) pendingRead;
+            int len = fis.read(buf, 0, toRead);
+            while (len != -1 && curRead < totalBytesToRead) {
+              os.write(buf, 0, len);
+              curRead += len;
+
+              pendingRead = totalBytesToRead - curRead;
+              toRead = pendingRead > buf.length ? buf.length
+                  : (int) pendingRead;
+              len = fis.read(buf, 0, toRead);
+            }
+            os.flush();
+          } finally {
+            IOUtils.closeQuietly(fis);
           }
-          os.flush();
         }
       };
-      
-      return Response.ok(stream).build();
+      ResponseBuilder resp = Response.ok(stream);
+      resp.header("Content-Type", contentType);
+      // Sending the X-Content-Type-Options response header with the value
+      // nosniff will prevent Internet Explorer from MIME-sniffing a response
+      // away from the declared content-type.
+      resp.header("X-Content-Type-Options", "nosniff");
+      return resp.build();
     } catch (IOException ex) {
       return Response.serverError().entity(ex.getMessage()).build();
     }
+  }
+
+  private long parseLongParam(String bytes) {
+    if (bytes == null || bytes.isEmpty()) {
+      return Long.MAX_VALUE;
+    }
+    return Long.parseLong(bytes);
   }
 }

@@ -104,7 +104,7 @@ public class TestNMWebServicesApps extends JerseyTestBase {
       dirsHandler = healthChecker.getDiskHandler();
       aclsManager = new ApplicationACLsManager(conf);
       nmContext = new NodeManager.NMContext(null, null, dirsHandler,
-          aclsManager, null);
+          aclsManager, null, false);
       NodeId nodeId = NodeId.newInstance("testhost.foo.com", 9999);
       ((NodeManager.NMContext)nmContext).setNodeId(nodeId);
       resourceView = new ResourceView() {
@@ -565,11 +565,14 @@ public class TestNMWebServicesApps extends JerseyTestBase {
       String type = exception.getString("exception");
       String classname = exception.getString("javaClassName");
       WebServicesTestUtils.checkStringMatch("exception message",
-          "For input string: \"foo\"", message);
+          "java.lang.IllegalArgumentException: Invalid ApplicationId prefix: "
+              + "app_foo_0000. The valid ApplicationId should start with prefix"
+              + " application",
+          message);
       WebServicesTestUtils.checkStringMatch("exception type",
-          "NumberFormatException", type);
+          "BadRequestException", type);
       WebServicesTestUtils.checkStringMatch("exception classname",
-          "java.lang.NumberFormatException", classname);
+          "org.apache.hadoop.yarn.webapp.BadRequestException", classname);
     }
   }
 

@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
 import org.apache.hadoop.io.DataOutputBuffer;
@@ -63,6 +64,8 @@ import org.apache.hadoop.yarn.server.nodemanager.Context;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.application.Application;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.application.ApplicationEvent;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.application.ApplicationEventType;
+
+import org.apache.hadoop.yarn.server.nodemanager.scheduler.LocalScheduler;
 import org.apache.hadoop.yarn.server.security.MasterKeyData;
 import org.apache.hadoop.yarn.server.utils.BuilderUtils;
 import org.apache.hadoop.yarn.server.utils.YarnServerSecurityUtils;
@@ -464,6 +467,12 @@ public class AMRMProxyService extends AbstractService implements
       interceptorClassNames.add(item.trim());
     }
 
+    // Make sure LocalScheduler is present at the beginning
+    // of the chain..
+    if (this.nmContext.isDistributedSchedulingEnabled()) {
+      interceptorClassNames.add(0, LocalScheduler.class.getName());
+    }
+
     return interceptorClassNames;
   }
 
@@ -512,6 +521,16 @@ public class AMRMProxyService extends AbstractService implements
     return null;
   }
 
+  @Private
+  public InetSocketAddress getBindAddress() {
+    return this.listenerEndpoint;
+  }
+
+  @Private
+  public AMRMProxyTokenSecretManager getSecretManager() {
+    return this.secretManager;
+  }
+
   /**
    * Private class for handling application stop events.
    *
@@ -546,7 +565,8 @@ public class AMRMProxyService extends AbstractService implements
    * ApplicationAttemptId instances.
    *
    */
-  private static class RequestInterceptorChainWrapper {
+  @Private
+  public static class RequestInterceptorChainWrapper {
     private RequestInterceptor rootInterceptor;
     private ApplicationAttemptId applicationAttemptId;
 

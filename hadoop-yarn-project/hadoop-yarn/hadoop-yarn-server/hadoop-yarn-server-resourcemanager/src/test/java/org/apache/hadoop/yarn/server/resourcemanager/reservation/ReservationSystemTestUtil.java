@@ -19,9 +19,7 @@ package org.apache.hadoop.yarn.server.resourcemanager.reservation;
 
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anySetOf;
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 import java.io.FileWriter;
 import java.io.IOException;
@@ -75,12 +73,14 @@ public class ReservationSystemTestUtil {
   public static ReservationSchedulerConfiguration createConf(
       String reservationQ, long timeWindow, float instConstraint,
       float avgConstraint) {
-    ReservationSchedulerConfiguration conf =
-        mock(ReservationSchedulerConfiguration.class);
+
+    ReservationSchedulerConfiguration realConf = new CapacitySchedulerConfiguration();
+    ReservationSchedulerConfiguration conf = spy(realConf);
     when(conf.getReservationWindow(reservationQ)).thenReturn(timeWindow);
     when(conf.getInstantaneousMaxCapacity(reservationQ))
         .thenReturn(instConstraint);
     when(conf.getAverageCapacity(reservationQ)).thenReturn(avgConstraint);
+
     return conf;
   }
 
@@ -90,7 +90,7 @@ public class ReservationSystemTestUtil {
     Assert.assertNotNull(plan);
     Assert.assertTrue(plan instanceof InMemoryPlan);
     Assert.assertEquals(planQName, plan.getQueueName());
-    Assert.assertEquals(8192, plan.getTotalCapacity().getMemory());
+    Assert.assertEquals(8192, plan.getTotalCapacity().getMemorySize());
     Assert.assertTrue(
         plan.getReservationAgent() instanceof AlignedPlannerWithGreedy);
     Assert
@@ -177,10 +177,15 @@ public class ReservationSystemTestUtil {
 
   public static ReservationDefinition createSimpleReservationDefinition(
       long arrival, long deadline, long duration) {
+    return createSimpleReservationDefinition(arrival, deadline, duration, 1);
+  }
+
+  public static ReservationDefinition createSimpleReservationDefinition(
+      long arrival, long deadline, long duration, int parallelism) {
     // create a request with a single atomic ask
     ReservationRequest r =
-        ReservationRequest.newInstance(Resource.newInstance(1024, 1), 1, 1,
-            duration);
+        ReservationRequest.newInstance(Resource.newInstance(1024, 1),
+            parallelism, parallelism, duration);
     ReservationDefinition rDef = new ReservationDefinitionPBImpl();
     ReservationRequests reqs = new ReservationRequestsPBImpl();
     reqs.setReservationResources(Collections.singletonList(r));
@@ -192,7 +197,8 @@ public class ReservationSystemTestUtil {
   }
 
   public static ReservationSubmissionRequest createSimpleReservationRequest(
-      int numContainers, long arrival, long deadline, long duration) {
+      ReservationId reservationId, int numContainers, long arrival,
+      long deadline, long duration) {
     // create a request with a single atomic ask
     ReservationRequest r =
         ReservationRequest.newInstance(Resource.newInstance(1024, 1),
@@ -205,7 +211,7 @@ public class ReservationSystemTestUtil {
             "testClientRMService#reservation");
     ReservationSubmissionRequest request =
         ReservationSubmissionRequest.newInstance(rDef,
-            reservationQ);
+            reservationQ, reservationId);
     return request;
   }
 

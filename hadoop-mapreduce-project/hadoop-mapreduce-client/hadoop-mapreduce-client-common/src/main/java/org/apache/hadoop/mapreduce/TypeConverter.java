@@ -327,7 +327,8 @@ public class TypeConverter {
         jobreport.getMapProgress(), jobreport.getReduceProgress(),
         jobreport.getCleanupProgress(), fromYarn(jobreport.getJobState()),
         jobPriority, jobreport.getUser(), jobreport.getJobName(),
-        jobreport.getJobFile(), trackingUrl, jobreport.isUber());
+        jobreport.getJobFile(), trackingUrl, jobreport.isUber(),
+        jobreport.getHistoryFile());
     jobStatus.setStartTime(jobreport.getStartTime());
     jobStatus.setFinishTime(jobreport.getFinishTime());
     jobStatus.setFailureInfo(jobreport.getDiagnostics());
@@ -520,13 +521,13 @@ public class TypeConverter {
         application.getApplicationResourceUsageReport();
     if (resourceUsageReport != null) {
       jobStatus.setNeededMem(
-          resourceUsageReport.getNeededResources().getMemory());
+          resourceUsageReport.getNeededResources().getMemorySize());
       jobStatus.setNumReservedSlots(
           resourceUsageReport.getNumReservedContainers());
       jobStatus.setNumUsedSlots(resourceUsageReport.getNumUsedContainers());
       jobStatus.setReservedMem(
-          resourceUsageReport.getReservedResources().getMemory());
-      jobStatus.setUsedMem(resourceUsageReport.getUsedResources().getMemory());
+          resourceUsageReport.getReservedResources().getMemorySize());
+      jobStatus.setUsedMem(resourceUsageReport.getUsedResources().getMemorySize());
     }
     return jobStatus;
   }

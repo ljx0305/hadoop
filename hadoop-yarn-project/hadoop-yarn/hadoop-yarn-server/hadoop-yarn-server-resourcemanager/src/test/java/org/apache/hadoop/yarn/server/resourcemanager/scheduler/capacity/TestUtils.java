@@ -42,6 +42,7 @@ import org.apache.hadoop.yarn.event.Event;
 import org.apache.hadoop.yarn.event.EventHandler;
 import org.apache.hadoop.yarn.factories.RecordFactory;
 import org.apache.hadoop.yarn.factory.providers.RecordFactoryProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContextImpl;
 import org.apache.hadoop.yarn.server.resourcemanager.ahs.RMApplicationHistoryWriter;
@@ -91,10 +92,10 @@ public class TestUtils {
       }
     };
     
-    // No op 
-    ContainerAllocationExpirer cae = 
+    // No op
+    ContainerAllocationExpirer cae =
         new ContainerAllocationExpirer(nullDispatcher);
-    
+
     Configuration conf = new Configuration();
     RMApplicationHistoryWriter writer =  mock(RMApplicationHistoryWriter.class);
     RMContextImpl rmContext =
@@ -122,7 +123,7 @@ public class TestUtils {
             return (Resource) args[1];
           }
         });
-    
+
     rmContext.setNodeLabelManager(nlm);
     rmContext.setSystemMetricsPublisher(mock(SystemMetricsPublisher.class));
     rmContext.setRMApplicationHistoryWriter(mock(RMApplicationHistoryWriter.class));
@@ -158,7 +159,7 @@ public class TestUtils {
   
   public static ResourceRequest createResourceRequest(
       String resourceName, int memory, int numContainers, boolean relaxLocality,
-      Priority priority, RecordFactory recordFactory) {
+      Priority priority, RecordFactory recordFactory, String labelExpression) {
     ResourceRequest request = 
         recordFactory.newRecordInstance(ResourceRequest.class);
     Resource capability = Resources.createResource(memory, 1);
@@ -168,10 +169,18 @@ public class TestUtils {
     request.setCapability(capability);
     request.setRelaxLocality(relaxLocality);
     request.setPriority(priority);
-    request.setNodeLabelExpression(RMNodeLabelsManager.NO_LABEL);
+    request.setNodeLabelExpression(labelExpression);
     return request;
   }
   
+  public static ResourceRequest createResourceRequest(
+      String resourceName, int memory, int numContainers, boolean relaxLocality,
+ Priority priority,
+      RecordFactory recordFactory) {
+    return createResourceRequest(resourceName, memory, numContainers,
+        relaxLocality, priority, recordFactory, RMNodeLabelsManager.NO_LABEL);
+  }
+
   public static ApplicationId getMockApplicationId(int appId) {
     return ApplicationId.newInstance(0L, appId);
   }
@@ -194,7 +203,7 @@ public class TestUtils {
     when(rmNode.getRackName()).thenReturn(rack);
     
     FiCaSchedulerNode node = spy(new FiCaSchedulerNode(rmNode, false));
-    LOG.info("node = " + host + " avail=" + node.getAvailableResource());
+    LOG.info("node = " + host + " avail=" + node.getUnallocatedResource());
     
     when(node.getNodeID()).thenReturn(nodeId);
     return node;
@@ -347,6 +356,48 @@ public class TestUtils {
         new CapacitySchedulerConfiguration(config);
     conf.setDefaultNodeLabelExpression(A, "x");
     conf.setDefaultNodeLabelExpression(B, "y");
+    return conf;
+  }
+
+  public static FiCaSchedulerApp getFiCaSchedulerApp(MockRM rm,
+      ApplicationId appId) {
+    CapacityScheduler cs = (CapacityScheduler) rm.getResourceScheduler();
+    return cs.getSchedulerApplications().get(appId).getCurrentAppAttempt();
+  }
+
+  /**
+   * Get a queue structure:
+   * <pre>
+   *             Root
+   *            /  |  \
+   *           a   b   c
+   *          10   20  70
+   * </pre>
+   */
+  public static Configuration
+  getConfigurationWithMultipleQueues(Configuration config) {
+    CapacitySchedulerConfiguration conf =
+        new CapacitySchedulerConfiguration(config);
+
+    // Define top-level queues
+    conf.setQueues(CapacitySchedulerConfiguration.ROOT,
+        new String[] { "a", "b", "c" });
+
+    final String A = CapacitySchedulerConfiguration.ROOT + ".a";
+    conf.setCapacity(A, 10);
+    conf.setMaximumCapacity(A, 100);
+    conf.setUserLimitFactor(A, 100);
+
+    final String B = CapacitySchedulerConfiguration.ROOT + ".b";
+    conf.setCapacity(B, 20);
+    conf.setMaximumCapacity(B, 100);
+    conf.setUserLimitFactor(B, 100);
+
+    final String C = CapacitySchedulerConfiguration.ROOT + ".c";
+    conf.setCapacity(C, 70);
+    conf.setMaximumCapacity(C, 100);
+    conf.setUserLimitFactor(C, 100);
+
     return conf;
   }
 }

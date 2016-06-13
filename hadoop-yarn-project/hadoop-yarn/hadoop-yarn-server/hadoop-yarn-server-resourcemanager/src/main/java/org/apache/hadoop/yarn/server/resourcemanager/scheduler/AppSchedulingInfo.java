@@ -29,8 +29,8 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -44,6 +44,9 @@ import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceRequest;
+import org.apache.hadoop.yarn.exceptions.YarnException;
+import org.apache.hadoop.yarn.server.resourcemanager.RMServerUtils;
+import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.rmcontainer.RMContainer;
 import org.apache.hadoop.yarn.server.resourcemanager.rmcontainer.RMContainerState;
 import org.apache.hadoop.yarn.util.resource.Resources;
@@ -70,9 +73,14 @@ public class AppSchedulingInfo {
   private ActiveUsersManager activeUsersManager;
   private boolean pending = true; // whether accepted/allocated by scheduler
   private ResourceUsage appResourceUsage;
+
   private AtomicBoolean userBlacklistChanged = new AtomicBoolean(false);
-  private final Set<String> amBlacklist = new HashSet<>();
-  private Set<String> userBlacklist = new HashSet<>();
+  // Set of places (nodes / racks) blacklisted by the system. Today, this only
+  // has places blacklisted for AM containers.
+  private final Set<String> placesBlacklistedBySystem = new HashSet<>();
+  private Set<String> placesBlacklistedByApp = new HashSet<>();
+
+  private Set<String> requestedPartitions = new HashSet<>();
 
   final Set<Priority> priorities = new TreeSet<>(COMPARATOR);
   final Map<Priority, Map<String, ResourceRequest>> resourceRequestMap =
@@ -89,7 +97,8 @@ public class AppSchedulingInfo {
     this.queue = queue;
     this.user = user;
     this.activeUsersManager = activeUsersManager;
-    this.containerIdCounter = new AtomicLong(epoch << EPOCH_BIT_SHIFT);
+    this.containerIdCounter =
+        new AtomicLong(epoch << EPOCH_BIT_SHIFT);
     this.appResourceUsage = appResourceUsage;
   }
 
@@ -117,6 +126,10 @@ public class AppSchedulingInfo {
     return pending;
   }
   
+  public Set<String> getRequestedPartitions() {
+    return requestedPartitions;
+  }
+
   /**
    * Clear any pending requests from this application.
    */
@@ -148,6 +161,18 @@ public class AppSchedulingInfo {
     boolean resourceUpdated = false;
 
     for (SchedContainerChangeRequest r : increaseRequests) {
+      if (r.getRMContainer().getState() != RMContainerState.RUNNING) {
+        LOG.warn("rmContainer's state is not RUNNING, for increase request with"
+            + " container-id=" + r.getContainerId());
+        continue;
+      }
+      try {
+        RMServerUtils.checkSchedContainerChangeRequest(r, true);
+      } catch (YarnException e) {
+        LOG.warn("Error happens when checking increase request, Ignoring.."
+            + " exception=", e);
+        continue;
+      }
       NodeId nodeId = r.getRMContainer().getAllocatedNode();
 
       Map<Priority, Map<ContainerId, SchedContainerChangeRequest>> requestsOnNode =
@@ -221,7 +246,7 @@ public class AppSchedulingInfo {
     
     if (LOG.isDebugEnabled()) {
       LOG.debug("Added increase request:" + request.getContainerId()
-          + " delta=" + request.getDeltaCapacity());
+          + " delta=" + delta);
     }
     
     // update priorities
@@ -326,6 +351,10 @@ public class AppSchedulingInfo {
       asks.put(resourceName, request);
 
       if (resourceName.equals(ResourceRequest.ANY)) {
+        //update the applications requested labels set
+        requestedPartitions.add(request.getNodeLabelExpression() == null
+            ? RMNodeLabelsManager.NO_LABEL : request.getNodeLabelExpression());
+
         anyResourcesUpdated = true;
 
         // Activate application. Metrics activation is done here.
@@ -422,32 +451,38 @@ public class AppSchedulingInfo {
   }
 
   /**
-   * The ApplicationMaster is updating the userBlacklist used for containers
-   * other than AMs.
+   * The ApplicationMaster is updating the placesBlacklistedByApp used for
+   * containers other than AMs.
    *
-   * @param blacklistAdditions resources to be added to the userBlacklist
-   * @param blacklistRemovals resources to be removed from the userBlacklist
+   * @param blacklistAdditions
+   *          resources to be added to the userBlacklist
+   * @param blacklistRemovals
+   *          resources to be removed from the userBlacklist
    */
-  public void updateBlacklist(
+  public void updatePlacesBlacklistedByApp(
       List<String> blacklistAdditions, List<String> blacklistRemovals) {
-    if (updateUserOrAMBlacklist(userBlacklist, blacklistAdditions,
+    if (updateBlacklistedPlaces(placesBlacklistedByApp, blacklistAdditions,
         blacklistRemovals)) {
       userBlacklistChanged.set(true);
     }
   }
 
   /**
-   * RM is updating blacklist for AM containers.
-   * @param blacklistAdditions resources to be added to the amBlacklist
-   * @param blacklistRemovals resources to be added to the amBlacklist
+   * Update the list of places that are blacklisted by the system. Today the
+   * system only blacklists places when it sees that AMs failed there
+   *
+   * @param blacklistAdditions
+   *          resources to be added to placesBlacklistedBySystem
+   * @param blacklistRemovals
+   *          resources to be removed from placesBlacklistedBySystem
    */
-  public void updateAMBlacklist(
+  public void updatePlacesBlacklistedBySystem(
       List<String> blacklistAdditions, List<String> blacklistRemovals) {
-    updateUserOrAMBlacklist(amBlacklist, blacklistAdditions,
+    updateBlacklistedPlaces(placesBlacklistedBySystem, blacklistAdditions,
         blacklistRemovals);
   }
 
-  boolean updateUserOrAMBlacklist(Set<String> blacklist,
+  private static boolean updateBlacklistedPlaces(Set<String> blacklist,
       List<String> blacklistAdditions, List<String> blacklistRemovals) {
     boolean changed = false;
     synchronized (blacklist) {
@@ -456,9 +491,7 @@ public class AppSchedulingInfo {
       }
 
       if (blacklistRemovals != null) {
-        if (blacklist.removeAll(blacklistRemovals)) {
-          changed = true;
-        }
+        changed = blacklist.removeAll(blacklistRemovals) || changed;
       }
     }
     return changed;
@@ -497,20 +530,24 @@ public class AppSchedulingInfo {
   }
 
   /**
-   * Returns if the node is either blacklisted by the user or the system
-   * @param resourceName the resourcename
-   * @param useAMBlacklist true if it should check amBlacklist
+   * Returns if the place (node/rack today) is either blacklisted by the
+   * application (user) or the system
+   *
+   * @param resourceName
+   *          the resourcename
+   * @param blacklistedBySystem
+   *          true if it should check amBlacklist
    * @return true if its blacklisted
    */
-  public boolean isBlacklisted(String resourceName,
-      boolean useAMBlacklist) {
-    if (useAMBlacklist){
-      synchronized (amBlacklist) {
-        return amBlacklist.contains(resourceName);
+  public boolean isPlaceBlacklisted(String resourceName,
+      boolean blacklistedBySystem) {
+    if (blacklistedBySystem){
+      synchronized (placesBlacklistedBySystem) {
+        return placesBlacklistedBySystem.contains(resourceName);
       }
     } else {
-      synchronized (userBlacklist) {
-        return userBlacklist.contains(resourceName);
+      synchronized (placesBlacklistedByApp) {
+        return placesBlacklistedByApp.contains(resourceName);
       }
     }
   }
@@ -520,24 +557,20 @@ public class AppSchedulingInfo {
     NodeId nodeId = increaseRequest.getNodeId();
     Priority priority = increaseRequest.getPriority();
     ContainerId containerId = increaseRequest.getContainerId();
-    
+    Resource deltaCapacity = increaseRequest.getDeltaCapacity();
+
     if (LOG.isDebugEnabled()) {
       LOG.debug("allocated increase request : applicationId=" + applicationId
           + " container=" + containerId + " host="
           + increaseRequest.getNodeId() + " user=" + user + " resource="
-          + increaseRequest.getDeltaCapacity());
+          + deltaCapacity);
     }
-    
     // Set queue metrics
-    queue.getMetrics().allocateResources(user,
-        increaseRequest.getDeltaCapacity());
-    
+    queue.getMetrics().allocateResources(user, deltaCapacity);
     // remove the increase request from pending increase request map
     removeIncreaseRequest(nodeId, priority, containerId);
-    
     // update usage
-    appResourceUsage.incUsed(increaseRequest.getNodePartition(),
-        increaseRequest.getDeltaCapacity());
+    appResourceUsage.incUsed(increaseRequest.getNodePartition(), deltaCapacity);
   }
   
   public synchronized void decreaseContainer(
@@ -752,12 +785,12 @@ public class AppSchedulingInfo {
   }
 
   public Set<String> getBlackList() {
-    return this.userBlacklist;
+    return this.placesBlacklistedByApp;
   }
 
   public Set<String> getBlackListCopy() {
-    synchronized (userBlacklist) {
-      return new HashSet<>(this.userBlacklist);
+    synchronized (placesBlacklistedByApp) {
+      return new HashSet<>(this.placesBlacklistedByApp);
     }
   }
 
@@ -765,7 +798,7 @@ public class AppSchedulingInfo {
       AppSchedulingInfo appInfo) {
     // This should not require locking the userBlacklist since it will not be
     // used by this instance until after setCurrentAppAttempt.
-    this.userBlacklist = appInfo.getBlackList();
+    this.placesBlacklistedByApp = appInfo.getBlackList();
   }
 
   public synchronized void recoverContainer(RMContainer rmContainer) {

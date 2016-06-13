@@ -27,12 +27,14 @@ import org.apache.hadoop.hdfs.DFSConfigKeys;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.MiniDFSNNTopology;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.HdfsConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeDescriptor;
 import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeManager;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.ha.HATestUtil;
 import org.apache.hadoop.hdfs.server.namenode.top.TopConf;
+import org.apache.hadoop.hdfs.util.HostsFileWriter;
 import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.io.nativeio.NativeIO.POSIX.NoMlockCacheManipulator;
 import org.apache.hadoop.net.ServerSocketUtil;
@@ -44,9 +46,9 @@ import org.mortbay.util.ajax.JSON;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import java.io.File;
-import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +57,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -91,6 +94,12 @@ public class TestNameNodeMXBean {
           cluster.getDataNodes().get(0).getDatanodeId());
       dd.setUpgradeDomain(upgradeDomain);
       String dnXferAddrWithUpgradeDomainSet = dd.getXferAddr();
+
+      // Put the second DN to maintenance state.
+      DatanodeDescriptor maintenanceNode = dm.getDatanode(
+          cluster.getDataNodes().get(1).getDatanodeId());
+      maintenanceNode.setInMaintenance();
+      String dnXferAddrInMaintenance = maintenanceNode.getXferAddr();
 
       FSNamesystem fsn = cluster.getNameNode().namesystem;
 
@@ -150,6 +159,10 @@ public class TestNameNodeMXBean {
         } else {
           assertTrue(liveNode.get("upgradeDomain").equals(upgradeDomain));
         }
+        // "adminState" is set to maintenance only for the specific dn.
+        boolean inMaintenance = liveNode.get("adminState").equals(
+            DatanodeInfo.AdminStates.IN_MAINTENANCE.toString());
+        assertFalse(xferAddr.equals(dnXferAddrInMaintenance) ^ inMaintenance);
       }
       assertEquals(fsn.getLiveNodes(), alivenodeinfo);
       // get attribute deadnodeinfo
@@ -163,7 +176,8 @@ public class TestNameNodeMXBean {
       // get attribute NameJournalStatus
       String nameJournalStatus = (String) (mbs.getAttribute(mxbeanName,
           "NameJournalStatus"));
-      assertEquals("Bad value for NameJournalStatus", fsn.getNameJournalStatus(), nameJournalStatus);
+      assertEquals("Bad value for NameJournalStatus",
+          fsn.getNameJournalStatus(), nameJournalStatus);
       // get attribute JournalTransactionInfo
       String journalTxnInfo = (String) mbs.getAttribute(mxbeanName,
           "JournalTransactionInfo");
@@ -171,11 +185,13 @@ public class TestNameNodeMXBean {
           journalTxnInfo);
       // get attribute "CompileInfo"
       String compileInfo = (String) mbs.getAttribute(mxbeanName, "CompileInfo");
-      assertEquals("Bad value for CompileInfo", fsn.getCompileInfo(), compileInfo);
+      assertEquals("Bad value for CompileInfo", fsn.getCompileInfo(),
+          compileInfo);
       // get attribute CorruptFiles
       String corruptFiles = (String) (mbs.getAttribute(mxbeanName,
           "CorruptFiles"));
-      assertEquals("Bad value for CorruptFiles", fsn.getCorruptFiles(), corruptFiles);
+      assertEquals("Bad value for CorruptFiles", fsn.getCorruptFiles(),
+          corruptFiles);
       // get attribute NameDirStatuses
       String nameDirStatuses = (String) (mbs.getAttribute(mxbeanName,
           "NameDirStatuses"));
@@ -187,7 +203,8 @@ public class TestNameNodeMXBean {
         File nameDir = new File(nameDirUri);
         System.out.println("Checking for the presence of " + nameDir +
             " in active name dirs.");
-        assertTrue(statusMap.get("active").containsKey(nameDir.getAbsolutePath()));
+        assertTrue(statusMap.get("active").containsKey(
+            nameDir.getAbsolutePath()));
       }
       assertEquals(2, statusMap.get("active").size());
       assertEquals(0, statusMap.get("failed").size());
@@ -236,8 +253,8 @@ public class TestNameNodeMXBean {
     conf.setInt(DFSConfigKeys.DFS_HEARTBEAT_INTERVAL_KEY, 1);
     conf.setInt(DFSConfigKeys.DFS_NAMENODE_HEARTBEAT_RECHECK_INTERVAL_KEY, 1);
     MiniDFSCluster cluster = null;
-    FileSystem localFileSys = null;
-    Path dir = null;
+    HostsFileWriter hostsFileWriter = new HostsFileWriter();
+    hostsFileWriter.initialize(conf, "temp/TestNameNodeMXBean");
 
     try {
       cluster = new MiniDFSCluster.Builder(conf).numDataNodes(3).build();
@@ -249,18 +266,12 @@ public class TestNameNodeMXBean {
       ObjectName mxbeanName = new ObjectName(
         "Hadoop:service=NameNode,name=NameNodeInfo");
 
-      // Define include file to generate deadNodes metrics
-      localFileSys = FileSystem.getLocal(conf);
-      Path workingDir = localFileSys.getWorkingDirectory();
-      dir = new Path(workingDir,"build/test/data/temp/TestNameNodeMXBean");
-      Path includeFile = new Path(dir, "include");
-      assertTrue(localFileSys.mkdirs(dir));
-      StringBuilder includeHosts = new StringBuilder();
+      List<String> hosts = new ArrayList<>();
       for(DataNode dn : cluster.getDataNodes()) {
-        includeHosts.append(dn.getDisplayName()).append("\n");
+        hosts.add(dn.getDisplayName());
       }
-      DFSTestUtil.writeFile(localFileSys, includeFile, includeHosts.toString());
-      conf.set(DFSConfigKeys.DFS_HOSTS, includeFile.toUri().getPath());
+      hostsFileWriter.initIncludeHosts(hosts.toArray(
+          new String[hosts.size()]));
       fsn.getBlockManager().getDatanodeManager().refreshNodes(conf);
 
       cluster.stopDataNode(0);
@@ -282,12 +293,10 @@ public class TestNameNodeMXBean {
         assertTrue(deadNode.containsKey("xferaddr"));
       }
     } finally {
-      if ((localFileSys != null) && localFileSys.exists(dir)) {
-        FileUtils.deleteQuietly(new File(dir.toUri().getPath()));
-      }
       if (cluster != null) {
         cluster.shutdown();
       }
+      hostsFileWriter.cleanup();
     }
   }
 

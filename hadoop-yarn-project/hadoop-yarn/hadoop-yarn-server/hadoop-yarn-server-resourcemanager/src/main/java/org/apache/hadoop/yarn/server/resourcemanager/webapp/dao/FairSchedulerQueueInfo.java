@@ -54,6 +54,7 @@ public class FairSchedulerQueueInfo {
   private ResourceInfo minResources;
   private ResourceInfo maxResources;
   private ResourceInfo usedResources;
+  private ResourceInfo demandResources;
   private ResourceInfo steadyFairResources;
   private ResourceInfo fairResources;
   private ResourceInfo clusterResources;
@@ -64,6 +65,8 @@ public class FairSchedulerQueueInfo {
 
   private String queueName;
   private String schedulingPolicy;
+
+  private boolean preemptable;
 
   private FairSchedulerQueueInfoList childQueues;
 
@@ -79,8 +82,9 @@ public class FairSchedulerQueueInfo {
     clusterResources = new ResourceInfo(scheduler.getClusterResource());
     
     usedResources = new ResourceInfo(queue.getResourceUsage());
-    fractionMemUsed = (float)usedResources.getMemory() /
-        clusterResources.getMemory();
+    demandResources = new ResourceInfo(queue.getDemand());
+    fractionMemUsed = (float)usedResources.getMemorySize() /
+        clusterResources.getMemorySize();
 
     steadyFairResources = new ResourceInfo(queue.getSteadyFairShare());
     fairResources = new ResourceInfo(queue.getFairShare());
@@ -91,11 +95,11 @@ public class FairSchedulerQueueInfo {
             scheduler.getClusterResource()));
 
     fractionMemSteadyFairShare =
-        (float)steadyFairResources.getMemory() / clusterResources.getMemory();
-    fractionMemFairShare = (float) fairResources.getMemory()
-        / clusterResources.getMemory();
-    fractionMemMinShare = (float)minResources.getMemory() / clusterResources.getMemory();
-    fractionMemMaxShare = (float)maxResources.getMemory() / clusterResources.getMemory();
+        (float)steadyFairResources.getMemorySize() / clusterResources.getMemorySize();
+    fractionMemFairShare = (float) fairResources.getMemorySize()
+        / clusterResources.getMemorySize();
+    fractionMemMinShare = (float)minResources.getMemorySize() / clusterResources.getMemorySize();
+    fractionMemMaxShare = (float)maxResources.getMemorySize() / clusterResources.getMemorySize();
     
     maxApps = allocConf.getQueueMaxApps(queueName);
 
@@ -108,6 +112,7 @@ public class FairSchedulerQueueInfo {
       return;
     }
 
+    preemptable = queue.isPreemptable();
     childQueues = getChildQueues(queue, scheduler);
   }
 
@@ -194,6 +199,13 @@ public class FairSchedulerQueueInfo {
   }
 
   /**
+   * @return the demand resource of this queue.
+     */
+  public ResourceInfo getDemandResources() {
+    return demandResources;
+  }
+
+  /**
    * Returns the queue's min share in as a fraction of the entire
    * cluster capacity.
    */
@@ -227,5 +239,9 @@ public class FairSchedulerQueueInfo {
   public Collection<FairSchedulerQueueInfo> getChildQueues() {
     return childQueues != null ? childQueues.getQueueInfoList() :
         new ArrayList<FairSchedulerQueueInfo>();
+  }
+
+  public boolean isPreemptable() {
+    return preemptable;
   }
 }

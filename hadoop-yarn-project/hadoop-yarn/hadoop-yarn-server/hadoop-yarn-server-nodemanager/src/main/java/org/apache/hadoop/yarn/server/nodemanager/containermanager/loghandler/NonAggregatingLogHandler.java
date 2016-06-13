@@ -34,6 +34,7 @@ import org.apache.hadoop.fs.FileContext;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.UnsupportedFileSystemException;
 import org.apache.hadoop.service.AbstractService;
+import org.apache.hadoop.util.concurrent.HadoopScheduledThreadPoolExecutor;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.event.Dispatcher;
@@ -170,6 +171,10 @@ public class NonAggregatingLogHandler extends AbstractService implements
         String user = appOwners.remove(appId);
         if (user == null) {
           LOG.error("Unable to locate user for " + appId);
+          // send LOG_HANDLING_FAILED out
+          NonAggregatingLogHandler.this.dispatcher.getEventHandler().handle(
+              new ApplicationEvent(appId,
+                  ApplicationEventType.APPLICATION_LOG_HANDLING_FAILED));
           break;
         }
         LogDeleterRunnable logDeleter = new LogDeleterRunnable(user, appId);
@@ -203,7 +208,7 @@ public class NonAggregatingLogHandler extends AbstractService implements
     ThreadFactory tf =
         new ThreadFactoryBuilder().setNameFormat("LogDeleter #%d").build();
     sched =
-        new ScheduledThreadPoolExecutor(conf.getInt(
+        new HadoopScheduledThreadPoolExecutor(conf.getInt(
             YarnConfiguration.NM_LOG_DELETION_THREADS_COUNT,
             YarnConfiguration.DEFAULT_NM_LOG_DELETE_THREAD_COUNT), tf);
     return sched;

@@ -37,7 +37,6 @@ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_SERVER_HTTPS_KEYSTORE_PAS
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_SERVER_HTTPS_TRUSTSTORE_PASSWORD_KEY;
 
 import java.io.IOException;
-import java.io.InterruptedIOException;
 import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
 import java.net.InetAddress;
@@ -55,7 +54,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
-import com.google.common.collect.Sets;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.Option;
@@ -573,6 +571,40 @@ public class DFSUtil {
   }
 
   /**
+   * Returns list of InetSocketAddresses corresponding to lifeline RPC servers
+   * at namenodes from the configuration.
+   *
+   * @param conf configuration
+   * @return list of InetSocketAddress
+   * @throws IOException on error
+   */
+  public static Map<String, Map<String, InetSocketAddress>>
+      getNNLifelineRpcAddressesForCluster(Configuration conf)
+      throws IOException {
+
+    Collection<String> parentNameServices = conf.getTrimmedStringCollection(
+        DFSConfigKeys.DFS_INTERNAL_NAMESERVICES_KEY);
+
+    if (parentNameServices.isEmpty()) {
+      parentNameServices = conf.getTrimmedStringCollection(
+          DFSConfigKeys.DFS_NAMESERVICES);
+    } else {
+      // Ensure that the internal service is indeed in the list of all available
+      // nameservices.
+      Set<String> availableNameServices = Sets.newHashSet(conf
+          .getTrimmedStringCollection(DFSConfigKeys.DFS_NAMESERVICES));
+      for (String nsId : parentNameServices) {
+        if (!availableNameServices.contains(nsId)) {
+          throw new IOException("Unknown nameservice: " + nsId);
+        }
+      }
+    }
+
+    return DFSUtilClient.getAddressesForNsIds(conf, parentNameServices, null,
+        DFS_NAMENODE_LIFELINE_RPC_ADDRESS_KEY);
+  }
+
+  /**
    * Map a logical namenode ID to its lifeline address.  Use the given
    * nameservice if specified, or the configured one if none is given.
    *
@@ -676,9 +708,16 @@ public class DFSUtil {
         "nnId=" + namenodeId + ";addr=" + addr + "]";
     }
   }
-  
+
+  /** @return Internal name services specified in the conf. */
+  static Collection<String> getInternalNameServices(Configuration conf) {
+    final Collection<String> ids = conf.getTrimmedStringCollection(
+        DFSConfigKeys.DFS_INTERNAL_NAMESERVICES_KEY);
+    return !ids.isEmpty()? ids: DFSUtilClient.getNameServiceIds(conf);
+  }
+
   /**
-   * Get a URI for each configured nameservice. If a nameservice is
+   * Get a URI for each internal nameservice. If a nameservice is
    * HA-enabled, then the logical URI of the nameservice is returned. If the
    * nameservice is not HA-enabled, then a URI corresponding to an RPC address
    * of the single NN for that nameservice is returned, preferring the service
@@ -688,8 +727,8 @@ public class DFSUtil {
    * @return a collection of all configured NN URIs, preferring service
    *         addresses
    */
-  public static Collection<URI> getNsServiceRpcUris(Configuration conf) {
-    return getNameServiceUris(conf,
+  public static Collection<URI> getInternalNsRpcUris(Configuration conf) {
+    return getNameServiceUris(conf, getInternalNameServices(conf),
         DFSConfigKeys.DFS_NAMENODE_SERVICE_RPC_ADDRESS_KEY,
         DFSConfigKeys.DFS_NAMENODE_RPC_ADDRESS_KEY);
   }
@@ -705,8 +744,8 @@ public class DFSUtil {
    *        nameservices
    * @return a collection of all configured NN URIs
    */
-  public static Collection<URI> getNameServiceUris(Configuration conf,
-      String... keys) {
+  static Collection<URI> getNameServiceUris(Configuration conf,
+      Collection<String> nameServices, String... keys) {
     Set<URI> ret = new HashSet<URI>();
     
     // We're passed multiple possible configuration keys for any given NN or HA
@@ -716,7 +755,7 @@ public class DFSUtil {
     // keep track of non-preferred keys here.
     Set<URI> nonPreferredUris = new HashSet<URI>();
     
-    for (String nsId : DFSUtilClient.getNameServiceIds(conf)) {
+    for (String nsId : nameServices) {
       if (HAUtil.isHAEnabled(conf, nsId)) {
         // Add the logical URI of the nameservice.
         try {
@@ -1295,7 +1334,9 @@ public class DFSUtil {
             sslConf.get("ssl.server.keystore.type", "jks"))
         .trustStore(sslConf.get("ssl.server.truststore.location"),
             getPassword(sslConf, DFS_SERVER_HTTPS_TRUSTSTORE_PASSWORD_KEY),
-            sslConf.get("ssl.server.truststore.type", "jks"));
+            sslConf.get("ssl.server.truststore.type", "jks"))
+        .excludeCiphers(
+            sslConf.get("ssl.server.exclude.cipher.list"));
   }
 
   /**

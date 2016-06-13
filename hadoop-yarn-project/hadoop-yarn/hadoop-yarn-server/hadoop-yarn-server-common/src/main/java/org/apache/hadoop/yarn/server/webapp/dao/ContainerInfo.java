@@ -36,8 +36,8 @@ import org.apache.hadoop.yarn.util.Times;
 public class ContainerInfo {
 
   protected String containerId;
-  protected int allocatedMB;
-  protected int allocatedVCores;
+  protected long allocatedMB;
+  protected long allocatedVCores;
   protected String assignedNodeId;
   protected int priority;
   protected long startedTime;
@@ -48,6 +48,7 @@ public class ContainerInfo {
   protected int containerExitStatus;
   protected ContainerState containerState;
   protected String nodeHttpAddress;
+  protected String nodeId;
 
   public ContainerInfo() {
     // JAXB needs this
@@ -56,7 +57,7 @@ public class ContainerInfo {
   public ContainerInfo(ContainerReport container) {
     containerId = container.getContainerId().toString();
     if (container.getAllocatedResource() != null) {
-      allocatedMB = container.getAllocatedResource().getMemory();
+      allocatedMB = container.getAllocatedResource().getMemorySize();
       allocatedVCores = container.getAllocatedResource().getVirtualCores();
     }
     if (container.getAssignedNode() != null) {
@@ -71,17 +72,18 @@ public class ContainerInfo {
     containerExitStatus = container.getContainerExitStatus();
     containerState = container.getContainerState();
     nodeHttpAddress = container.getNodeHttpAddress();
+    nodeId = container.getAssignedNode().toString();
   }
 
   public String getContainerId() {
     return containerId;
   }
 
-  public int getAllocatedMB() {
+  public long getAllocatedMB() {
     return allocatedMB;
   }
 
-  public int getAllocatedVCores() {
+  public long getAllocatedVCores() {
     return allocatedVCores;
   }
 
@@ -123,5 +125,9 @@ public class ContainerInfo {
 
   public String getNodeHttpAddress() {
     return nodeHttpAddress;
+  }
+
+  public String getNodeId() {
+    return nodeId;
   }
 }

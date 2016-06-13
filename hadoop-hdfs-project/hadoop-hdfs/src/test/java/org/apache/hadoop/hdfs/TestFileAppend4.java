@@ -43,7 +43,6 @@ import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
 import org.apache.hadoop.hdfs.protocol.HdfsConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
-import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.FSDirectory;
 import org.apache.hadoop.hdfs.server.namenode.INodeFile;
 import org.apache.hadoop.hdfs.server.namenode.LeaseExpiredException;
@@ -67,7 +66,6 @@ public class TestFileAppend4 {
   MiniDFSCluster cluster;
   Path file1;
   FSDataOutputStream stm;
-  final boolean simulatedStorage = false;
 
   {
     DFSTestUtil.setNameNodeLogLevel(Level.ALL);
@@ -78,9 +76,6 @@ public class TestFileAppend4 {
   @Before
   public void setUp() throws Exception {
     this.conf = new Configuration();
-    if (simulatedStorage) {
-      SimulatedFSDataset.setFactory(conf);
-    }
 
     // lower heartbeat interval for fast recognition of DN death
     conf.setInt(DFSConfigKeys.DFS_NAMENODE_HEARTBEAT_RECHECK_INTERVAL_KEY,
@@ -89,7 +84,7 @@ public class TestFileAppend4 {
     conf.setInt(HdfsClientConfigKeys.DFS_CLIENT_SOCKET_TIMEOUT_KEY, 5000);
     // handle under-replicated blocks quickly (for replication asserts)
     conf.setInt(
-        DFSConfigKeys.DFS_NAMENODE_REPLICATION_PENDING_TIMEOUT_SEC_KEY, 5);
+        DFSConfigKeys.DFS_NAMENODE_RECONSTRUCTION_PENDING_TIMEOUT_SEC_KEY, 5);
     conf.setInt(DFSConfigKeys.DFS_NAMENODE_REPLICATION_INTERVAL_KEY, 1);
     
     // handle failures in the DFSClient pipeline quickly

@@ -83,7 +83,7 @@ public class TestSignalContainer {
     Assert.assertEquals(request, contReceived);
 
     for(Container container : conts) {
-      rm.signalContainer(container.getId(),
+      rm.signalToContainer(container.getId(),
           SignalContainerCommand.OUTPUT_THREAD_DUMP);
     }
 
@@ -106,7 +106,7 @@ public class TestSignalContainer {
 
     am.unregisterAppAttempt();
     nm1.nodeHeartbeat(attempt.getAppAttemptId(), 1, ContainerState.COMPLETE);
-    am.waitForState(RMAppAttemptState.FINISHED);
+    rm.waitForState(am.getApplicationAttemptId(), RMAppAttemptState.FINISHED);
 
     rm.stop();
   }

@@ -63,7 +63,7 @@ public class ContainersMonitorImpl extends AbstractService implements
 
   private final ContainerExecutor containerExecutor;
   private final Dispatcher eventDispatcher;
-  private final Context context;
+  protected final Context context;
   private ResourceCalculatorPlugin resourceCalculatorPlugin;
   private Configuration conf;
   private static float vmemRatio;
@@ -82,6 +82,9 @@ public class ContainersMonitorImpl extends AbstractService implements
   private int nodeCpuPercentageForYARN;
 
   private ResourceUtilization containersUtilization;
+  // Tracks the aggregated allocation of the currently allocated containers
+  // when queuing of containers at the NMs is enabled.
+  private ResourceUtilization containersAllocation;
 
   private volatile boolean stopped = false;
 
@@ -96,6 +99,7 @@ public class ContainersMonitorImpl extends AbstractService implements
     this.monitoringThread = new MonitoringThread();
 
     this.containersUtilization = ResourceUtilization.newInstance(0, 0, 0.0f);
+    this.containersAllocation = ResourceUtilization.newInstance(0, 0, 0.0f);
   }
 
   @Override
@@ -132,10 +136,11 @@ public class ContainersMonitorImpl extends AbstractService implements
         YarnConfiguration.DEFAULT_NM_CONTAINER_METRICS_UNREGISTER_DELAY_MS);
 
     long configuredPMemForContainers =
-        NodeManagerHardwareUtils.getContainerMemoryMB(conf) * 1024 * 1024L;
+        NodeManagerHardwareUtils.getContainerMemoryMB(
+            this.resourceCalculatorPlugin, conf) * 1024 * 1024L;
 
     long configuredVCoresForContainers =
-        NodeManagerHardwareUtils.getVCores(conf);
+        NodeManagerHardwareUtils.getVCores(this.resourceCalculatorPlugin, conf);
 
     // Setting these irrespective of whether checks are enabled. Required in
     // the UI.
@@ -233,8 +238,7 @@ public class ContainersMonitorImpl extends AbstractService implements
     super.serviceStop();
   }
 
-  @VisibleForTesting
-  static class ProcessTreeInfo {
+  public static class ProcessTreeInfo {
     private ContainerId containerId;
     private String pid;
     private ResourceCalculatorProcessTree pTree;
@@ -451,6 +455,15 @@ public class ContainersMonitorImpl extends AbstractService implements
             // cpuUsagePercentPerCore should be 300% and
             // cpuUsageTotalCoresPercentage should be 50%
             float cpuUsagePercentPerCore = pTree.getCpuUsagePercent();
+            if (cpuUsagePercentPerCore < 0) {
+              // CPU usage is not available likely because the container just
+              // started. Let us skip this turn and consider this container
+              // in the next iteration.
+              LOG.info("Skipping monitoring container " + containerId
+                  + " since CPU usage is not yet available.");
+              continue;
+            }
+
             float cpuUsageTotalCoresPercentage = cpuUsagePercentPerCore /
                 resourceCalculatorPlugin.getNumProcessors();
 
@@ -615,15 +628,16 @@ public class ContainersMonitorImpl extends AbstractService implements
     }
 
     ContainerId containerId = monitoringEvent.getContainerId();
-    ContainerMetrics usageMetrics = ContainerMetrics
-        .forContainer(containerId, containerMetricsPeriodMs,
-        containerMetricsUnregisterDelayMs);
+    ContainerMetrics usageMetrics;
 
     int vmemLimitMBs;
     int pmemLimitMBs;
     int cpuVcores;
     switch (monitoringEvent.getType()) {
     case START_MONITORING_CONTAINER:
+      usageMetrics = ContainerMetrics
+          .forContainer(containerId, containerMetricsPeriodMs,
+          containerMetricsUnregisterDelayMs);
       ContainerStartMonitoringEvent startEvent =
           (ContainerStartMonitoringEvent) monitoringEvent;
       usageMetrics.recordStateChangeDurations(
@@ -636,13 +650,20 @@ public class ContainersMonitorImpl extends AbstractService implements
           vmemLimitMBs, pmemLimitMBs, cpuVcores);
       break;
     case STOP_MONITORING_CONTAINER:
-      usageMetrics.finished();
+      usageMetrics = ContainerMetrics.getContainerMetrics(
+          containerId);
+      if (usageMetrics != null) {
+        usageMetrics.finished();
+      }
       break;
     case CHANGE_MONITORING_CONTAINER_RESOURCE:
+      usageMetrics = ContainerMetrics
+          .forContainer(containerId, containerMetricsPeriodMs,
+          containerMetricsUnregisterDelayMs);
       ChangeMonitoringContainerResourceEvent changeEvent =
           (ChangeMonitoringContainerResourceEvent) monitoringEvent;
       Resource resource = changeEvent.getResource();
-      pmemLimitMBs = resource.getMemory();
+      pmemLimitMBs = (int) resource.getMemorySize();
       vmemLimitMBs = (int) (pmemLimitMBs * vmemRatio);
       cpuVcores = resource.getVirtualCores();
       usageMetrics.recordResourceLimit(
@@ -697,6 +718,84 @@ public class ContainersMonitorImpl extends AbstractService implements
     this.containersUtilization = utilization;
   }
 
+  public ResourceUtilization getContainersAllocation() {
+    return this.containersAllocation;
+  }
+
+  /**
+   * @return true if there are available allocated resources for the given
+   *         container to start.
+   */
+  @Override
+  public boolean hasResourcesAvailable(ProcessTreeInfo pti) {
+    synchronized (this.containersAllocation) {
+      // Check physical memory.
+      if (this.containersAllocation.getPhysicalMemory() +
+          (int) (pti.getPmemLimit() >> 20) >
+          (int) (getPmemAllocatedForContainers() >> 20)) {
+        return false;
+      }
+      // Check virtual memory.
+      if (isVmemCheckEnabled() &&
+          this.containersAllocation.getVirtualMemory() +
+          (int) (pti.getVmemLimit() >> 20) >
+          (int) (getVmemAllocatedForContainers() >> 20)) {
+        return false;
+      }
+      // Check CPU.
+      if (this.containersAllocation.getCPU()
+          + allocatedCpuUsage(pti) > 1.0f) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  @Override
+  public void increaseContainersAllocation(ProcessTreeInfo pti) {
+    synchronized (this.containersAllocation) {
+      increaseResourceUtilization(this.containersAllocation, pti);
+    }
+  }
+
+  @Override
+  public void decreaseContainersAllocation(ProcessTreeInfo pti) {
+    synchronized (this.containersAllocation) {
+      decreaseResourceUtilization(this.containersAllocation, pti);
+    }
+  }
+
+  @Override
+  public void increaseResourceUtilization(ResourceUtilization resourceUtil,
+      ProcessTreeInfo pti) {
+    resourceUtil.addTo((int) (pti.getPmemLimit() >> 20),
+        (int) (pti.getVmemLimit() >> 20), allocatedCpuUsage(pti));
+  }
+
+  @Override
+  public void decreaseResourceUtilization(ResourceUtilization resourceUtil,
+      ProcessTreeInfo pti) {
+    resourceUtil.subtractFrom((int) (pti.getPmemLimit() >> 20),
+        (int) (pti.getVmemLimit() >> 20), allocatedCpuUsage(pti));
+  }
+
+  @Override
+  public void subtractNodeResourcesFromResourceUtilization(
+      ResourceUtilization resourceUtil) {
+    resourceUtil.subtractFrom((int) (getPmemAllocatedForContainers() >> 20),
+        (int) (getVmemAllocatedForContainers() >> 20), 1.0f);
+  }
+
+  /**
+   * Calculates the vCores CPU usage that is assigned to the given
+   * {@link ProcessTreeInfo}. In particular, it takes into account the number of
+   * vCores that are allowed to be used by the NM and returns the CPU usage
+   * as a normalized value between {@literal >=} 0 and {@literal <=} 1.
+   */
+  private float allocatedCpuUsage(ProcessTreeInfo pti) {
+    return (float) pti.getCpuVcores() / getVCoresAllocatedForContainers();
+  }
+
   @Override
   @SuppressWarnings("unchecked")
   public void handle(ContainersMonitorEvent monitoringEvent) {
@@ -714,40 +813,56 @@ public class ContainersMonitorImpl extends AbstractService implements
 
     switch (monitoringEvent.getType()) {
     case START_MONITORING_CONTAINER:
-      ContainerStartMonitoringEvent startEvent =
-          (ContainerStartMonitoringEvent) monitoringEvent;
-      LOG.info("Starting resource-monitoring for " + containerId);
-      updateContainerMetrics(monitoringEvent);
-      trackingContainers.put(containerId,
-          new ProcessTreeInfo(containerId, null, null,
-              startEvent.getVmemLimit(), startEvent.getPmemLimit(),
-              startEvent.getCpuVcores()));
+      onStartMonitoringContainer(monitoringEvent, containerId);
       break;
     case STOP_MONITORING_CONTAINER:
-      LOG.info("Stopping resource-monitoring for " + containerId);
-      updateContainerMetrics(monitoringEvent);
-      trackingContainers.remove(containerId);
+      onStopMonitoringContainer(monitoringEvent, containerId);
       break;
     case CHANGE_MONITORING_CONTAINER_RESOURCE:
-      ChangeMonitoringContainerResourceEvent changeEvent =
-          (ChangeMonitoringContainerResourceEvent) monitoringEvent;
-      ProcessTreeInfo processTreeInfo = trackingContainers.get(containerId);
-      if (processTreeInfo == null) {
-        LOG.warn("Failed to track container "
-            + containerId.toString()
-            + ". It may have already completed.");
-        break;
-      }
-      LOG.info("Changing resource-monitoring for " + containerId);
-      updateContainerMetrics(monitoringEvent);
-      long pmemLimit = changeEvent.getResource().getMemory() * 1024L * 1024L;
-      long vmemLimit = (long) (pmemLimit * vmemRatio);
-      int cpuVcores = changeEvent.getResource().getVirtualCores();
-      processTreeInfo.setResourceLimit(pmemLimit, vmemLimit, cpuVcores);
-      changeContainerResource(containerId, changeEvent.getResource());
+      onChangeMonitoringContainerResource(monitoringEvent, containerId);
       break;
     default:
       // TODO: Wrong event.
     }
   }
+
+  protected void onChangeMonitoringContainerResource(
+      ContainersMonitorEvent monitoringEvent, ContainerId containerId) {
+    ChangeMonitoringContainerResourceEvent changeEvent =
+        (ChangeMonitoringContainerResourceEvent) monitoringEvent;
+    ProcessTreeInfo processTreeInfo = trackingContainers.get(containerId);
+    if (processTreeInfo == null) {
+      LOG.warn("Failed to track container "
+          + containerId.toString()
+          + ". It may have already completed.");
+      return;
+    }
+    LOG.info("Changing resource-monitoring for " + containerId);
+    updateContainerMetrics(monitoringEvent);
+    long pmemLimit = changeEvent.getResource().getMemorySize() * 1024L * 1024L;
+    long vmemLimit = (long) (pmemLimit * vmemRatio);
+    int cpuVcores = changeEvent.getResource().getVirtualCores();
+    processTreeInfo.setResourceLimit(pmemLimit, vmemLimit, cpuVcores);
+    changeContainerResource(containerId, changeEvent.getResource());
+  }
+
+  protected void onStopMonitoringContainer(
+      ContainersMonitorEvent monitoringEvent, ContainerId containerId) {
+    LOG.info("Stopping resource-monitoring for " + containerId);
+    updateContainerMetrics(monitoringEvent);
+    trackingContainers.remove(containerId);
+  }
+
+  protected void onStartMonitoringContainer(
+      ContainersMonitorEvent monitoringEvent, ContainerId containerId) {
+    ContainerStartMonitoringEvent startEvent =
+        (ContainerStartMonitoringEvent) monitoringEvent;
+    LOG.info("Starting resource-monitoring for " + containerId);
+    updateContainerMetrics(monitoringEvent);
+    trackingContainers.put(containerId,
+        new ProcessTreeInfo(containerId, null, null,
+            startEvent.getVmemLimit(), startEvent.getPmemLimit(),
+            startEvent.getCpuVcores()));
+  }
+
 }

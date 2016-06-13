@@ -50,6 +50,7 @@ import org.apache.hadoop.hdfs.server.blockmanagement.BlockPlacementPolicyDefault
 import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeStorageInfo;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
+import org.apache.hadoop.hdfs.server.datanode.InternalDataNodeTestUtils;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNodeAdapter;
 import org.apache.hadoop.hdfs.server.protocol.BlockReportContext;
@@ -296,7 +297,7 @@ public class TestDNFencing {
       LOG.info("Getting more replication work computed");
     }
     BlockManager bm1 = nn1.getNamesystem().getBlockManager();
-    while (bm1.getPendingReplicationBlocksCount() > 0) {
+    while (bm1.getPendingReconstructionBlocksCount() > 0) {
       BlockManagerTestUtil.updateState(bm1);
       cluster.triggerHeartbeats();
       Thread.sleep(1000);
@@ -539,8 +540,8 @@ public class TestDNFencing {
 
       DataNode dn = cluster.getDataNodes().get(0);
       DatanodeProtocolClientSideTranslatorPB spy =
-        DataNodeTestUtils.spyOnBposToNN(dn, nn2);
-      
+        InternalDataNodeTestUtils.spyOnBposToNN(dn, nn2);
+
       Mockito.doAnswer(delayer)
         .when(spy).blockReport(
           Mockito.<DatanodeRegistration>anyObject(),

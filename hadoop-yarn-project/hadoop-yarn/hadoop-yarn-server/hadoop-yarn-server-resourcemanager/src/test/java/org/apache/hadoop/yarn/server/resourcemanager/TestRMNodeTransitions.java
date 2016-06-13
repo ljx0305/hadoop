@@ -31,10 +31,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
-import org.apache.hadoop.net.Node;
 import org.apache.hadoop.util.HostsFileReader;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.api.records.ContainerExitStatus;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
@@ -47,8 +47,9 @@ import org.apache.hadoop.yarn.event.InlineDispatcher;
 import org.apache.hadoop.yarn.server.api.protocolrecords.NodeHeartbeatResponse;
 import org.apache.hadoop.yarn.server.api.records.NodeHealthStatus;
 import org.apache.hadoop.yarn.server.api.records.NodeStatus;
+import org.apache.hadoop.yarn.server.resourcemanager.rmcontainer
+    .AllocationExpirationInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.rmcontainer.ContainerAllocationExpirer;
-import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNode;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNodeCleanAppEvent;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNodeCleanContainerEvent;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNodeEvent;
@@ -686,6 +687,20 @@ public class TestRMNodeTransitions {
     Assert.assertEquals(0, node.getRunningApps().size());
   }
 
+  @Test
+  public void testUnknownNodeId() {
+    NodeId nodeId =
+        NodesListManager.createUnknownNodeId("host1");
+    RMNodeImpl node =
+        new RMNodeImpl(nodeId, rmContext, null, 0, 0, null, null, null);
+    rmContext.getInactiveRMNodes().putIfAbsent(nodeId,node);
+    node.handle(
+        new RMNodeEvent(node.getNodeID(), RMNodeEventType.DECOMMISSION));
+    Assert.assertNull(
+        "Must be null as there is no NODE_UNUSABLE update",
+        nodesListManagerEvent);
+  }
+
   private RMNodeImpl getRunningNode() {
     return getRunningNode(null, 0);
   }
@@ -853,13 +868,13 @@ public class TestRMNodeTransitions {
   public void testResourceUpdateOnRunningNode() {
     RMNodeImpl node = getRunningNode();
     Resource oldCapacity = node.getTotalCapability();
-    assertEquals("Memory resource is not match.", oldCapacity.getMemory(), 4096);
+    assertEquals("Memory resource is not match.", oldCapacity.getMemorySize(), 4096);
     assertEquals("CPU resource is not match.", oldCapacity.getVirtualCores(), 4);
     node.handle(new RMNodeResourceUpdateEvent(node.getNodeID(),
         ResourceOption.newInstance(Resource.newInstance(2048, 2),
             ResourceOption.OVER_COMMIT_TIMEOUT_MILLIS_DEFAULT)));
     Resource newCapacity = node.getTotalCapability();
-    assertEquals("Memory resource is not match.", newCapacity.getMemory(), 2048);
+    assertEquals("Memory resource is not match.", newCapacity.getMemorySize(), 2048);
     assertEquals("CPU resource is not match.", newCapacity.getVirtualCores(), 2);
 
     Assert.assertEquals(NodeState.RUNNING, node.getState());
@@ -877,13 +892,13 @@ public class TestRMNodeTransitions {
   public void testResourceUpdateOnNewNode() {
     RMNodeImpl node = getNewNode(Resource.newInstance(4096, 4));
     Resource oldCapacity = node.getTotalCapability();
-    assertEquals("Memory resource is not match.", oldCapacity.getMemory(), 4096);
+    assertEquals("Memory resource is not match.", oldCapacity.getMemorySize(), 4096);
     assertEquals("CPU resource is not match.", oldCapacity.getVirtualCores(), 4);
     node.handle(new RMNodeResourceUpdateEvent(node.getNodeID(),
         ResourceOption.newInstance(Resource.newInstance(2048, 2), 
             ResourceOption.OVER_COMMIT_TIMEOUT_MILLIS_DEFAULT)));
     Resource newCapacity = node.getTotalCapability();
-    assertEquals("Memory resource is not match.", newCapacity.getMemory(), 2048);
+    assertEquals("Memory resource is not match.", newCapacity.getMemorySize(), 2048);
     assertEquals("CPU resource is not match.", newCapacity.getVirtualCores(), 2);
 
     Assert.assertEquals(NodeState.NEW, node.getState());
@@ -897,13 +912,13 @@ public class TestRMNodeTransitions {
     int initialUnHealthy = cm.getUnhealthyNMs();
     int initialDecommissioning = cm.getNumDecommissioningNMs();
     Resource oldCapacity = node.getTotalCapability();
-    assertEquals("Memory resource is not match.", oldCapacity.getMemory(), 4096);
+    assertEquals("Memory resource is not match.", oldCapacity.getMemorySize(), 4096);
     assertEquals("CPU resource is not match.", oldCapacity.getVirtualCores(), 4);
     node.handle(new RMNodeResourceUpdateEvent(node.getNodeID(), ResourceOption
         .newInstance(Resource.newInstance(2048, 2),
             ResourceOption.OVER_COMMIT_TIMEOUT_MILLIS_DEFAULT)));
     Resource newCapacity = node.getTotalCapability();
-    assertEquals("Memory resource is not match.", newCapacity.getMemory(), 2048);
+    assertEquals("Memory resource is not match.", newCapacity.getMemorySize(), 2048);
     assertEquals("CPU resource is not match.", newCapacity.getVirtualCores(), 2);
 
     Assert.assertEquals(NodeState.REBOOTED, node.getState());
@@ -949,10 +964,14 @@ public class TestRMNodeTransitions {
         ApplicationAttemptId.newInstance(appId, 1);
     ContainerId containerId1 = ContainerId.newContainerId(appAttemptId, 1L);
     ContainerId containerId2 = ContainerId.newContainerId(appAttemptId, 2L);
-    mockExpirer.register(containerId1);
-    mockExpirer.register(containerId2);
-    verify(mockExpirer).register(containerId1);
-    verify(mockExpirer).register(containerId2);
+    AllocationExpirationInfo expirationInfo1 =
+        new AllocationExpirationInfo(containerId1);
+    AllocationExpirationInfo expirationInfo2 =
+        new AllocationExpirationInfo(containerId2);
+    mockExpirer.register(expirationInfo1);
+    mockExpirer.register(expirationInfo2);
+    verify(mockExpirer).register(expirationInfo1);
+    verify(mockExpirer).register(expirationInfo2);
     ((RMContextImpl) rmContext).setContainerAllocationExpirer(mockExpirer);
     RMNodeImpl rmNode = getRunningNode();
     ContainerStatus status1 =
@@ -966,7 +985,84 @@ public class TestRMNodeTransitions {
     statusList.add(status2);
     RMNodeStatusEvent statusEvent = getMockRMNodeStatusEvent(statusList);
     rmNode.handle(statusEvent);
-    verify(mockExpirer).unregister(containerId1);
-    verify(mockExpirer).unregister(containerId2);
+    verify(mockExpirer).unregister(expirationInfo1);
+    verify(mockExpirer).unregister(expirationInfo2);
+  }
+
+  @Test
+  public void testResourceUpdateOnDecommissioningNode() {
+    RMNodeImpl node = getDecommissioningNode();
+    Resource oldCapacity = node.getTotalCapability();
+    assertEquals("Memory resource is not match.", oldCapacity.getMemorySize(), 4096);
+    assertEquals("CPU resource is not match.", oldCapacity.getVirtualCores(), 4);
+    node.handle(new RMNodeResourceUpdateEvent(node.getNodeID(),
+        ResourceOption.newInstance(Resource.newInstance(2048, 2),
+            ResourceOption.OVER_COMMIT_TIMEOUT_MILLIS_DEFAULT)));
+    Resource originalCapacity = node.getOriginalTotalCapability();
+    assertEquals("Memory resource is not match.", originalCapacity.getMemorySize(), oldCapacity.getMemorySize());
+    assertEquals("CPU resource is not match.", originalCapacity.getVirtualCores(), oldCapacity.getVirtualCores());
+    Resource newCapacity = node.getTotalCapability();
+    assertEquals("Memory resource is not match.", newCapacity.getMemorySize(), 2048);
+    assertEquals("CPU resource is not match.", newCapacity.getVirtualCores(), 2);
+
+    Assert.assertEquals(NodeState.DECOMMISSIONING, node.getState());
+    Assert.assertNotNull(nodesListManagerEvent);
+    Assert.assertEquals(NodesListManagerEventType.NODE_USABLE,
+        nodesListManagerEvent.getType());
+  }
+
+  @Test
+  public void testResourceUpdateOnRecommissioningNode() {
+    RMNodeImpl node = getDecommissioningNode();
+    Resource oldCapacity = node.getTotalCapability();
+    assertEquals("Memory resource is not match.", oldCapacity.getMemorySize(), 4096);
+    assertEquals("CPU resource is not match.", oldCapacity.getVirtualCores(), 4);
+    node.handle(new RMNodeEvent(node.getNodeID(),
+        RMNodeEventType.RECOMMISSION));
+    Resource originalCapacity = node.getOriginalTotalCapability();
+    assertEquals("Original total capability not null after recommission", null, originalCapacity);
+  }
+
+  @Test
+  public void testDisappearingContainer() {
+    ContainerId cid1 = BuilderUtils.newContainerId(
+        BuilderUtils.newApplicationAttemptId(
+            BuilderUtils.newApplicationId(1, 1), 1), 1);
+    ContainerId cid2 = BuilderUtils.newContainerId(
+        BuilderUtils.newApplicationAttemptId(
+            BuilderUtils.newApplicationId(2, 2), 2), 2);
+    ArrayList<ContainerStatus> containerStats =
+        new ArrayList<ContainerStatus>();
+    containerStats.add(ContainerStatus.newInstance(cid1,
+        ContainerState.RUNNING, "", -1));
+    containerStats.add(ContainerStatus.newInstance(cid2,
+        ContainerState.RUNNING, "", -1));
+    node = getRunningNode();
+    node.handle(getMockRMNodeStatusEvent(containerStats));
+    assertEquals("unexpected number of running containers",
+        2, node.getLaunchedContainers().size());
+    Assert.assertTrue("first container not running",
+        node.getLaunchedContainers().contains(cid1));
+    Assert.assertTrue("second container not running",
+        node.getLaunchedContainers().contains(cid2));
+    assertEquals("already completed containers",
+        0, completedContainers.size());
+    containerStats.remove(0);
+    node.handle(getMockRMNodeStatusEvent(containerStats));
+    assertEquals("expected one container to be completed",
+        1, completedContainers.size());
+    ContainerStatus cs = completedContainers.get(0);
+    assertEquals("first container not the one that completed",
+        cid1, cs.getContainerId());
+    assertEquals("completed container not marked complete",
+        ContainerState.COMPLETE, cs.getState());
+    assertEquals("completed container not marked aborted",
+        ContainerExitStatus.ABORTED, cs.getExitStatus());
+    Assert.assertTrue("completed container not marked missing",
+        cs.getDiagnostics().contains("not reported"));
+    assertEquals("unexpected number of running containers",
+        1, node.getLaunchedContainers().size());
+    Assert.assertTrue("second container not running",
+        node.getLaunchedContainers().contains(cid2));
   }
 }

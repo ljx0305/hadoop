@@ -35,7 +35,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FsTracer;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.BlockReader;
-import org.apache.hadoop.hdfs.BlockReaderFactory;
+import org.apache.hadoop.hdfs.client.impl.BlockReaderFactory;
 import org.apache.hadoop.hdfs.ClientContext;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
@@ -158,7 +158,7 @@ public class TestBlockTokenWithDFS {
           setBlockToken(lblock.getBlockToken()).
           setInetSocketAddress(targetAddr).
           setStartOffset(0).
-          setLength(-1).
+          setLength(0).
           setVerifyChecksum(true).
           setClientName("TestBlockTokenWithDFS").
           setDatanodeInfo(nodes[0]).

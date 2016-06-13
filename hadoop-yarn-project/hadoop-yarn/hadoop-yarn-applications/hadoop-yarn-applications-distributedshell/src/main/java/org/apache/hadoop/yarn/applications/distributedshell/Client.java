@@ -74,6 +74,7 @@ import org.apache.hadoop.yarn.api.records.timeline.TimelineDomain;
 import org.apache.hadoop.yarn.client.api.TimelineClient;
 import org.apache.hadoop.yarn.client.api.YarnClient;
 import org.apache.hadoop.yarn.client.api.YarnClientApplication;
+import org.apache.hadoop.yarn.client.util.YarnClientUtils;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.util.ConverterUtils;
@@ -126,7 +127,7 @@ public class Client {
   // Queue for App master
   private String amQueue = "";
   // Amt. of memory resource to request for to run the App Master
-  private int amMemory = 10; 
+  private long amMemory = 10;
   // Amt. of virtual core resource to request for to run the App Master
   private int amVCores = 1;
 
@@ -167,6 +168,8 @@ public class Client {
   private boolean keepContainers = false;
 
   private long attemptFailuresValidityInterval = -1;
+
+  private Vector<CharSequence> containerRetryOptions = new Vector<>(5);
 
   // Debug flag
   boolean debugFlag = false;
@@ -287,6 +290,18 @@ public class Client {
             + " will be allocated, \"\" means containers"
             + " can be allocated anywhere, if you don't specify the option,"
             + " default node_label_expression of queue will be used.");
+    opts.addOption("container_retry_policy", true,
+        "Retry policy when container fails to run, "
+            + "0: NEVER_RETRY, 1: RETRY_ON_ALL_ERRORS, "
+            + "2: RETRY_ON_SPECIFIC_ERROR_CODES");
+    opts.addOption("container_retry_error_codes", true,
+        "When retry policy is set to RETRY_ON_SPECIFIC_ERROR_CODES, error "
+            + "codes is specified with this option, "
+            + "e.g. --container_retry_error_codes 1,2,3");
+    opts.addOption("container_max_retries", true,
+        "If container could retry, it specifies max retires");
+    opts.addOption("container_retry_interval", true,
+        "Interval between each retry, unit is milliseconds");
   }
 
   /**
@@ -429,6 +444,24 @@ public class Client {
       }
     }
 
+    // Get container retry options
+    if (cliParser.hasOption("container_retry_policy")) {
+      containerRetryOptions.add("--container_retry_policy "
+          + cliParser.getOptionValue("container_retry_policy"));
+    }
+    if (cliParser.hasOption("container_retry_error_codes")) {
+      containerRetryOptions.add("--container_retry_error_codes "
+          + cliParser.getOptionValue("container_retry_error_codes"));
+    }
+    if (cliParser.hasOption("container_max_retries")) {
+      containerRetryOptions.add("--container_max_retries "
+          + cliParser.getOptionValue("container_max_retries"));
+    }
+    if (cliParser.hasOption("container_retry_interval")) {
+      containerRetryOptions.add("--container_retry_interval "
+          + cliParser.getOptionValue("container_retry_interval"));
+    }
+
     return true;
   }
 
@@ -487,7 +520,7 @@ public class Client {
     // the required resources from the RM for the app master
     // Memory ask has to be a multiple of min and less than max. 
     // Dump out information about cluster capability as seen by the resource manager
-    int maxMem = appResponse.getMaximumResourceCapability().getMemory();
+    long maxMem = appResponse.getMaximumResourceCapability().getMemorySize();
     LOG.info("Max mem capability of resources in this cluster " + maxMem);
 
     // A resource ask cannot exceed the max. 
@@ -638,6 +671,8 @@ public class Client {
       vargs.add("--debug");
     }
 
+    vargs.addAll(containerRetryOptions);
+
     vargs.add("1>" + ApplicationConstants.LOG_DIR_EXPANSION_VAR + "/AppMaster.stdout");
     vargs.add("2>" + ApplicationConstants.LOG_DIR_EXPANSION_VAR + "/AppMaster.stderr");
 
@@ -669,7 +704,7 @@ public class Client {
     if (UserGroupInformation.isSecurityEnabled()) {
       // Note: Credentials class is marked as LimitedPrivate for HDFS and MapReduce
       Credentials credentials = new Credentials();
-      String tokenRenewer = conf.get(YarnConfiguration.RM_PRINCIPAL);
+      String tokenRenewer = YarnClientUtils.getRmPrincipal(conf);
       if (tokenRenewer == null || tokenRenewer.length() == 0) {
         throw new IOException(
           "Can't get Master Kerberos principal for the RM to use as renewer");

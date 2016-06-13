@@ -75,9 +75,9 @@ Hence on Cluster X where the `core-site.xml` is set as above, the typical pathna
 
             distcp hdfs://namenodeClusterY:port/pathSrc hdfs://namenodeClusterZ:port/pathDest
 
-4.  `webhdfs://namenodeClusterX:http_port/foo/bar` and `hftp://namenodeClusterX:http_port/foo/bar`
+4.  `webhdfs://namenodeClusterX:http_port/foo/bar`
 
-    * These are file system URIs respectively for accessing files via the WebHDFS file system and the HFTP file system. Note that WebHDFS and HFTP use the HTTP port of the namenode but not the RPC port.
+    * It is an URI for accessing files via the WebHDFS file system. Note that WebHDFS uses the HTTP port of the namenode but not the RPC port.
 
 5.  `http://namenodeClusterX:http_port/webhdfs/v1/foo/bar` and `http://proxyClusterX:http_port/foo/bar`
 
@@ -133,9 +133,9 @@ Hence on Cluster X, where the `core-site.xml` is set to make the default fs to u
 
             distcp viewfs://clusterY:/pathSrc viewfs://clusterZ/pathDest
 
-4.  `viewfs://clusterX-webhdfs/foo/bar` and `viewfs://clusterX-hftp/foo/bar`
+4.  `viewfs://clusterX-webhdfs/foo/bar`
 
-    * These are URIs respectively for accessing files via the WebHDFS file system and the HFTP file system.
+    * It is an URI for accessing files via the WebHDFS file system.
 
 5.  `http://namenodeClusterX:http_port/webhdfs/v1/foo/bar` and `http://proxyClusterX:http_port/foo/bar`
 
@@ -210,11 +210,11 @@ The mount tables can be described in `core-site.xml` but it is better to use ind
 
 In the file `mountTable.xml`, there is a definition of the mount table "ClusterX" for the hypothetical cluster that is a federation of the three namespace volumes managed by the three namenodes
 
-1.  nn1-clusterx.example.com:8020,
-2.  nn2-clusterx.example.com:8020, and
-3.  nn3-clusterx.example.com:8020.
+1.  nn1-clusterx.example.com:9820,
+2.  nn2-clusterx.example.com:9820, and
+3.  nn3-clusterx.example.com:9820.
 
-Here `/home` and `/tmp` are in the namespace managed by namenode nn1-clusterx.example.com:8020, and projects `/foo` and `/bar` are hosted on the other namenodes of the federated cluster. The home directory base path is set to `/home` so that each user can access its home directory using the getHomeDirectory() method defined in [FileSystem](../../api/org/apache/hadoop/fs/FileSystem.html)/[FileContext](../../api/org/apache/hadoop/fs/FileContext.html).
+Here `/home` and `/tmp` are in the namespace managed by namenode nn1-clusterx.example.com:9820, and projects `/foo` and `/bar` are hosted on the other namenodes of the federated cluster. The home directory base path is set to `/home` so that each user can access its home directory using the getHomeDirectory() method defined in [FileSystem](../../api/org/apache/hadoop/fs/FileSystem.html)/[FileContext](../../api/org/apache/hadoop/fs/FileContext.html).
 
 ```xml
 <configuration>
@@ -224,19 +224,19 @@ Here `/home` and `/tmp` are in the namespace managed by namenode nn1-clusterx.ex
   </property>
   <property>
     <name>fs.viewfs.mounttable.ClusterX.link./home</name>
-    <value>hdfs://nn1-clusterx.example.com:8020/home</value>
+    <value>hdfs://nn1-clusterx.example.com:9820/home</value>
   </property>
   <property>
     <name>fs.viewfs.mounttable.ClusterX.link./tmp</name>
-    <value>hdfs://nn1-clusterx.example.com:8020/tmp</value>
+    <value>hdfs://nn1-clusterx.example.com:9820/tmp</value>
   </property>
   <property>
     <name>fs.viewfs.mounttable.ClusterX.link./projects/foo</name>
-    <value>hdfs://nn2-clusterx.example.com:8020/projects/foo</value>
+    <value>hdfs://nn2-clusterx.example.com:9820/projects/foo</value>
   </property>
   <property>
     <name>fs.viewfs.mounttable.ClusterX.link./projects/bar</name>
-    <value>hdfs://nn3-clusterx.example.com:8020/projects/bar</value>
+    <value>hdfs://nn3-clusterx.example.com:9820/projects/bar</value>
   </property>
 </configuration>
 ```

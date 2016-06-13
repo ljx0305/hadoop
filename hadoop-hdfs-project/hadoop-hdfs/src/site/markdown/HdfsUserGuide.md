@@ -121,7 +121,7 @@ The rest of this document assumes the user is able to set up and run a HDFS with
 Web Interface
 -------------
 
-NameNode and DataNode each run an internal web server in order to display basic information about the current status of the cluster. With the default configuration, the NameNode front page is at `http://namenode-name:50070/`. It lists the DataNodes in the cluster and basic statistics of the cluster. The web interface can also be used to browse the file system (using "Browse the file system" link on the NameNode front page).
+NameNode and DataNode each run an internal web server in order to display basic information about the current status of the cluster. With the default configuration, the NameNode front page is at `http://namenode-name:9870/`. It lists the DataNodes in the cluster and basic statistics of the cluster. The web interface can also be used to browse the file system (using "Browse the file system" link on the NameNode front page).
 
 Shell Commands
 --------------
@@ -142,12 +142,16 @@ The `bin/hdfs dfsadmin` command supports a few HDFS administration related opera
   during last upgrade.
 
 * `-refreshNodes`: Updates the namenode with the set of datanodes
-  allowed to connect to the namenode. Namenodes re-read datanode
+  allowed to connect to the namenode. By default, Namenodes re-read datanode
   hostnames in the file defined by `dfs.hosts`, `dfs.hosts.exclude`
    Hosts defined in `dfs.hosts` are the datanodes that are part of the
    cluster. If there are entries in `dfs.hosts`, only the hosts in it
    are allowed to register with the namenode. Entries in
    `dfs.hosts.exclude` are datanodes that need to be decommissioned.
+   Alternatively if `dfs.namenode.hosts.provider.classname` is set to
+   `org.apache.hadoop.hdfs.server.blockmanagement.CombinedHostFileManager`,
+   all include and exclude hosts are specified in the JSON file defined by
+   `dfs.hosts`.
    Datanodes complete decommissioning when all the replicas from them
    are replicated to other datanodes. Decommissioned nodes are not
    automatically shutdown and are not chosen for writing for new

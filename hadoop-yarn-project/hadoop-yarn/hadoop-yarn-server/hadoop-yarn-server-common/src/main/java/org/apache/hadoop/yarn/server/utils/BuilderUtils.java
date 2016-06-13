@@ -45,6 +45,7 @@ import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
 import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
+import org.apache.hadoop.yarn.api.records.ExecutionType;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.LocalResource;
 import org.apache.hadoop.yarn.api.records.LocalResourceType;
@@ -215,6 +216,13 @@ public class BuilderUtils {
   public static ContainerStatus newContainerStatus(ContainerId containerId,
       ContainerState containerState, String diagnostics, int exitStatus,
       Resource capability) {
+    return newContainerStatus(containerId, containerState, diagnostics,
+        exitStatus, capability, ExecutionType.GUARANTEED);
+  }
+
+  public static ContainerStatus newContainerStatus(ContainerId containerId,
+      ContainerState containerState, String diagnostics, int exitStatus,
+      Resource capability, ExecutionType executionType) {
     ContainerStatus containerStatus = recordFactory
       .newRecordInstance(ContainerStatus.class);
     containerStatus.setState(containerState);
@@ -222,12 +230,13 @@ public class BuilderUtils {
     containerStatus.setDiagnostics(diagnostics);
     containerStatus.setExitStatus(exitStatus);
     containerStatus.setCapability(capability);
+    containerStatus.setExecutionType(executionType);
     return containerStatus;
   }
 
   public static Container newContainer(ContainerId containerId, NodeId nodeId,
       String nodeHttpAddress, Resource resource, Priority priority,
-      Token containerToken) {
+      Token containerToken, ExecutionType executionType) {
     Container container = recordFactory.newRecordInstance(Container.class);
     container.setId(containerId);
     container.setNodeId(nodeId);
@@ -235,7 +244,15 @@ public class BuilderUtils {
     container.setResource(resource);
     container.setPriority(priority);
     container.setContainerToken(containerToken);
+    container.setExecutionType(executionType);
     return container;
+  }
+
+  public static Container newContainer(ContainerId containerId, NodeId nodeId,
+      String nodeHttpAddress, Resource resource, Priority priority,
+      Token containerToken) {
+    return newContainer(containerId, nodeId, nodeHttpAddress, resource,
+        priority, containerToken, ExecutionType.GUARANTEED);
   }
 
   public static <T extends Token> T newToken(Class<T> tokenClass,
@@ -425,7 +442,7 @@ public class BuilderUtils {
     return report;
   }
 
-  public static Resource newResource(int memory, int vCores) {
+  public static Resource newResource(long memory, long vCores) {
     Resource resource = recordFactory.newRecordInstance(Resource.class);
     resource.setMemory(memory);
     resource.setVirtualCores(vCores);

@@ -26,6 +26,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.client.HdfsClientConfigKeys;
+import org.apache.hadoop.hdfs.client.impl.BlockReaderTestUtil;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -99,8 +100,6 @@ public class TestConnCache {
     DFSClient client = new DFSClient(
         new InetSocketAddress("localhost",
             util.getCluster().getNameNodePort()), util.getConf());
-    ClientContext cacheContext =
-        ClientContext.get(contextName, client.getConf());
     DFSInputStream in = client.open(testFile.toString());
     LOG.info("opened " + testFile.toString());
     byte[] dataBuf = new byte[BLOCK_SIZE];

@@ -21,7 +21,6 @@ package org.apache.hadoop.yarn.server.resourcemanager;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyString;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -30,6 +29,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 import org.junit.Assert;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -40,6 +40,7 @@ import org.apache.hadoop.service.Service.STATE;
 import org.apache.hadoop.yarn.api.ApplicationClientProtocol;
 import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationsRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationReportRequest;
+import org.apache.hadoop.yarn.api.protocolrecords.GetApplicationReportResponse;
 import org.apache.hadoop.yarn.api.protocolrecords.GetNewApplicationRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.KillApplicationRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.SubmitApplicationRequest;
@@ -111,8 +112,7 @@ public class TestApplicationACLs {
           Configuration conf) {
         QueueACLsManager mockQueueACLsManager = mock(QueueACLsManager.class);
         when(mockQueueACLsManager.checkAccess(any(UserGroupInformation.class),
-            any(QueueACL.class), anyString(), any(ApplicationId.class),
-            anyString())).thenAnswer(new Answer() {
+            any(QueueACL.class), any(RMApp.class))).thenAnswer(new Answer() {
           public Object answer(InvocationOnMock invocation) {
             return isQueueUser;
           }
@@ -179,6 +179,8 @@ public class TestApplicationACLs {
     verifyEnemyAccess();
 
     verifyAdministerQueueUserAccess();
+
+    verifyInvalidQueueWithAcl();
   }
 
   @SuppressWarnings("deprecation")
@@ -385,11 +387,44 @@ public class TestApplicationACLs {
     Assert.assertEquals("Enemy should not see app reserved containers",
         -1, usageReport.getNumReservedContainers());
     Assert.assertEquals("Enemy should not see app used resources",
-        -1, usageReport.getUsedResources().getMemory());
+        -1, usageReport.getUsedResources().getMemorySize());
     Assert.assertEquals("Enemy should not see app reserved resources",
-        -1, usageReport.getReservedResources().getMemory());
+        -1, usageReport.getReservedResources().getMemorySize());
     Assert.assertEquals("Enemy should not see app needed resources",
-        -1, usageReport.getNeededResources().getMemory());
+        -1, usageReport.getNeededResources().getMemorySize());
+  }
+
+  private void verifyInvalidQueueWithAcl() throws Exception {
+    isQueueUser = true;
+    SubmitApplicationRequest submitRequest =
+        recordFactory.newRecordInstance(SubmitApplicationRequest.class);
+    ApplicationSubmissionContext context =
+        recordFactory.newRecordInstance(ApplicationSubmissionContext.class);
+    ApplicationId applicationId = rmClient
+        .getNewApplication(
+            recordFactory.newRecordInstance(GetNewApplicationRequest.class))
+        .getApplicationId();
+    context.setApplicationId(applicationId);
+    Map<ApplicationAccessType, String> acls =
+        new HashMap<ApplicationAccessType, String>();
+    ContainerLaunchContext amContainer =
+        recordFactory.newRecordInstance(ContainerLaunchContext.class);
+    Resource resource = BuilderUtils.newResource(1024, 1);
+    context.setResource(resource);
+    amContainer.setApplicationACLs(acls);
+    context.setQueue("InvalidQueue");
+    context.setAMContainerSpec(amContainer);
+    submitRequest.setApplicationSubmissionContext(context);
+    rmClient.submitApplication(submitRequest);
+    resourceManager.waitForState(applicationId, RMAppState.FAILED);
+    final GetApplicationReportRequest appReportRequest =
+        recordFactory.newRecordInstance(GetApplicationReportRequest.class);
+    appReportRequest.setApplicationId(applicationId);
+    GetApplicationReportResponse applicationReport =
+        rmClient.getApplicationReport(appReportRequest);
+    ApplicationReport appReport = applicationReport.getApplicationReport();
+    Assert.assertTrue(appReport.getDiagnostics()
+        .contains("submitted by user owner to unknown queue: InvalidQueue"));
   }
 
   private void verifyAdministerQueueUserAccess() throws Exception {

@@ -86,6 +86,10 @@ public class JvmMetrics implements MetricsSource {
                        new JvmMetrics(processName, sessionId));
   }
 
+  public static void reattach(MetricsSystem ms, JvmMetrics jvmMetrics) {
+    ms.register(JvmMetrics.name(), JvmMetrics.description(), jvmMetrics);
+  }
+
   public static JvmMetrics initSingleton(String processName, String sessionId) {
     return Singleton.INSTANCE.init(processName, sessionId);
   }
@@ -140,7 +144,7 @@ public class JvmMetrics implements MetricsSource {
     
     if (pauseMonitor != null) {
       rb.addCounter(GcNumWarnThresholdExceeded,
-          pauseMonitor.getNumGcWarnThreadholdExceeded());
+          pauseMonitor.getNumGcWarnThresholdExceeded());
       rb.addCounter(GcNumInfoThresholdExceeded,
           pauseMonitor.getNumGcInfoThresholdExceeded());
       rb.addCounter(GcTotalExtraSleepTime,

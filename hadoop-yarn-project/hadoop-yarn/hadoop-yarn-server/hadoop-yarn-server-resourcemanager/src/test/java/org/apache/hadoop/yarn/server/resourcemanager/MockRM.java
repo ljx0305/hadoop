@@ -56,13 +56,15 @@ import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.LogAggregationContext;
-import org.apache.hadoop.yarn.api.records.ResourceRequest;
-import org.apache.hadoop.yarn.api.records.SignalContainerCommand;
 import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.NodeState;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.api.records.ResourceRequest;
+import org.apache.hadoop.yarn.api.records.SignalContainerCommand;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.event.Dispatcher;
+import org.apache.hadoop.yarn.event.DrainDispatcher;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.security.AMRMTokenIdentifier;
 import org.apache.hadoop.yarn.server.api.protocolrecords.NMContainerStatus;
@@ -91,6 +93,8 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerNode;
 import org.apache.hadoop.yarn.server.resourcemanager.security.ClientToAMTokenSecretManagerInRM;
 import org.apache.hadoop.yarn.server.resourcemanager.security.NMTokenSecretManagerInRM;
 import org.apache.hadoop.yarn.server.resourcemanager.security.RMContainerTokenSecretManager;
+
+
 import org.apache.hadoop.yarn.util.Records;
 import org.apache.hadoop.yarn.util.YarnVersionInfo;
 import org.apache.log4j.Level;
@@ -103,8 +107,12 @@ public class MockRM extends ResourceManager {
 
   static final Logger LOG = Logger.getLogger(MockRM.class);
   static final String ENABLE_WEBAPP = "mockrm.webapp.enabled";
-  
-  final private boolean useNullRMNodeLabelsManager;
+  private static final int SECOND = 1000;
+  private static final int TIMEOUT_MS_FOR_ATTEMPT = 40 * SECOND;
+  private static final int TIMEOUT_MS_FOR_CONTAINER_AND_NODE = 10 * SECOND;
+  private static final int WAIT_MS_PER_LOOP = 10;
+
+  private final boolean useNullRMNodeLabelsManager;
 
   public MockRM() {
     this(new YarnConfiguration());
@@ -142,88 +150,121 @@ public class MockRM extends ResourceManager {
     }
   }
 
+  @Override
+  protected Dispatcher createDispatcher() {
+    return new DrainDispatcher();
+  }
+
+  public void drainEvents() {
+    Dispatcher rmDispatcher = getRmDispatcher();
+    if (rmDispatcher instanceof DrainDispatcher) {
+      ((DrainDispatcher) rmDispatcher).await();
+    } else {
+      throw new UnsupportedOperationException("Not a Drain Dispatcher!");
+    }
+  }
+
+  /**
+   * Wait until an application has reached a specified state.
+   * The timeout is 80 seconds.
+   * @param appId the id of an application
+   * @param finalState the application state waited
+   * @throws InterruptedException
+   *         if interrupted while waiting for the state transition
+   */
   public void waitForState(ApplicationId appId, RMAppState finalState)
-      throws Exception {
+      throws InterruptedException {
     RMApp app = getRMContext().getRMApps().get(appId);
     Assert.assertNotNull("app shouldn't be null", app);
-    final int timeoutMsecs = 80000;
-    final int waitMsPerLoop = 500;
-    int loop = 0;
-    while (!finalState.equals(app.getState()) &&
-        ((waitMsPerLoop * loop) < timeoutMsecs)) {
+    final int timeoutMsecs = 80 * SECOND;
+    int timeWaiting = 0;
+    while (!finalState.equals(app.getState())) {
+      if (timeWaiting >= timeoutMsecs) {
+        break;
+      }
+
       LOG.info("App : " + appId + " State is : " + app.getState() +
-          " Waiting for state : " + finalState);
-      Thread.yield();
-      Thread.sleep(waitMsPerLoop);
-      loop++;
+              " Waiting for state : " + finalState);
+      Thread.sleep(WAIT_MS_PER_LOOP);
+      timeWaiting += WAIT_MS_PER_LOOP;
     }
-    int waitedMsecs = waitMsPerLoop * loop;
+
     LOG.info("App State is : " + app.getState());
-    if (waitedMsecs >= timeoutMsecs) {
-      Assert.fail("App state is not correct (timedout): expected: " +
-          finalState + " actual: " + app.getState() +
-          " for the application " + appId);
-    }
+    Assert.assertEquals("App State is not correct (timeout).", finalState,
+      app.getState());
   }
 
+  /**
+   * Wait until an attempt has reached a specified state.
+   * The timeout is 40 seconds.
+   * @param attemptId the id of an attempt
+   * @param finalState the attempt state waited
+   * @throws InterruptedException
+   *         if interrupted while waiting for the state transition
+   */
   public void waitForState(ApplicationAttemptId attemptId,
-      RMAppAttemptState finalState)
-      throws Exception {
-    waitForState(attemptId, finalState, 40000);
+      RMAppAttemptState finalState) throws InterruptedException {
+    waitForState(attemptId, finalState, TIMEOUT_MS_FOR_ATTEMPT);
   }
 
+  /**
+   * Wait until an attempt has reached a specified state.
+   * The timeout can be specified by the parameter.
+   * @param attemptId the id of an attempt
+   * @param finalState the attempt state waited
+   * @param timeoutMsecs the length of timeout in milliseconds
+   * @throws InterruptedException
+   *         if interrupted while waiting for the state transition
+   */
   public void waitForState(ApplicationAttemptId attemptId,
-      RMAppAttemptState finalState, int timeoutMsecs) throws Exception {
+      RMAppAttemptState finalState, int timeoutMsecs)
+      throws InterruptedException {
     RMApp app = getRMContext().getRMApps().get(attemptId.getApplicationId());
     Assert.assertNotNull("app shouldn't be null", app);
     RMAppAttempt attempt = app.getRMAppAttempt(attemptId);
-    final int minWaitMsecs = 1000;
-    final int waitMsPerLoop = 10;
-    int loop = 0;
-    while (!finalState.equals(attempt.getAppAttemptState())
-        && waitMsPerLoop * loop < timeoutMsecs) {
-      LOG.info("AppAttempt : " + attemptId + " State is : " +
+    MockRM.waitForState(attempt, finalState, timeoutMsecs);
+  }
+
+  /**
+   * Wait until an attempt has reached a specified state.
+   * The timeout is 40 seconds.
+   * @param attempt an attempt
+   * @param finalState the attempt state waited
+   * @throws InterruptedException
+   *         if interrupted while waiting for the state transition
+   */
+  public static void waitForState(RMAppAttempt attempt,
+      RMAppAttemptState finalState) throws InterruptedException {
+    waitForState(attempt, finalState, TIMEOUT_MS_FOR_ATTEMPT);
+  }
+
+  /**
+   * Wait until an attempt has reached a specified state.
+   * The timeout can be specified by the parameter.
+   * @param attempt an attempt
+   * @param finalState the attempt state waited
+   * @param timeoutMsecs the length of timeout in milliseconds
+   * @throws InterruptedException
+   *         if interrupted while waiting for the state transition
+   */
+  public static void waitForState(RMAppAttempt attempt,
+      RMAppAttemptState finalState, int timeoutMsecs)
+      throws InterruptedException {
+    int timeWaiting = 0;
+    while (!finalState.equals(attempt.getAppAttemptState())) {
+      if (timeWaiting >= timeoutMsecs) {
+        break;
+      }
+
+      LOG.info("AppAttempt : " + attempt.getAppAttemptId() + " State is : " +
           attempt.getAppAttemptState() + " Waiting for state : " + finalState);
-      Thread.yield();
-      Thread.sleep(waitMsPerLoop);
-      loop++;
+      Thread.sleep(WAIT_MS_PER_LOOP);
+      timeWaiting += WAIT_MS_PER_LOOP;
     }
-    int waitedMsecs = waitMsPerLoop * loop;
-    if (minWaitMsecs > waitedMsecs) {
-      Thread.sleep(minWaitMsecs - waitedMsecs);
-    }
+
     LOG.info("Attempt State is : " + attempt.getAppAttemptState());
-    if (waitedMsecs >= timeoutMsecs) {
-      Assert.fail("Attempt state is not correct (timedout): expected: "
-          + finalState + " actual: " + attempt.getAppAttemptState()+
-          " for the application attempt " + attemptId);
-    }
-  }
-
-  public void waitForContainerState(ContainerId containerId,
-      RMContainerState state) throws Exception {
-    int timeoutSecs = 0;
-    RMContainer container = getResourceScheduler().getRMContainer(containerId);
-    while ((container == null || container.getState() != state)
-        && timeoutSecs++ < 40) {
-      System.out.println(
-          "Waiting for" + containerId + " state to be:" + state.name());
-      Thread.sleep(200);
-    }
-    Assert.assertTrue(container.getState() == state);
-  }
-
-  public void waitForContainerAllocated(MockNM nm, ContainerId containerId)
-      throws Exception {
-    int timeoutSecs = 0;
-    while (getResourceScheduler().getRMContainer(containerId) == null
-        && timeoutSecs++ < 40) {
-      System.out.println("Waiting for" + containerId + " to be allocated.");
-      nm.nodeHeartbeat(true);
-      Thread.sleep(200);
-    }
-    Assert.assertNotNull("Failed in waiting for " + containerId + " " +
-        "allocation.", getResourceScheduler().getRMContainer(containerId));
+    Assert.assertEquals("Attempt state is not correct (timeout).", finalState,
+      attempt.getState());
   }
 
   public void waitForContainerToComplete(RMAppAttempt attempt,
@@ -237,7 +278,7 @@ public class MockRM extends ResourceManager {
           return;
         }
       }
-      Thread.sleep(200);
+      Thread.sleep(WAIT_MS_PER_LOOP);
     }
   }
 
@@ -249,58 +290,109 @@ public class MockRM extends ResourceManager {
       System.out.println("Application " + appId
           + " is waiting for AM to restart. Current has "
           + app.getAppAttempts().size() + " attempts.");
-      Thread.sleep(200);
+      Thread.sleep(WAIT_MS_PER_LOOP);
     }
     return launchAndRegisterAM(app, this, nm);
   }
 
+  /**
+   * Wait until a container has reached a specified state.
+   * The timeout is 10 seconds.
+   * @param nm A mock nodemanager
+   * @param containerId the id of a container
+   * @param containerState the container state waited
+   * @return if reach the state before timeout; false otherwise.
+   * @throws Exception
+   *         if interrupted while waiting for the state transition
+   *         or an unexpected error while MockNM is hearbeating.
+   */
   public boolean waitForState(MockNM nm, ContainerId containerId,
       RMContainerState containerState) throws Exception {
-    // default is wait for 30,000 ms
-    return waitForState(nm, containerId, containerState, 30 * 1000);
+    return waitForState(nm, containerId, containerState,
+      TIMEOUT_MS_FOR_CONTAINER_AND_NODE);
   }
-  
+
+  /**
+   * Wait until a container has reached a specified state.
+   * The timeout is specified by the parameter.
+   * @param nm A mock nodemanager
+   * @param containerId the id of a container
+   * @param containerState the container state waited
+   * @param timeoutMsecs the length of timeout in milliseconds
+   * @return if reach the state before timeout; false otherwise.
+   * @throws Exception
+   *         if interrupted while waiting for the state transition
+   *         or an unexpected error while MockNM is hearbeating.
+   */
   public boolean waitForState(MockNM nm, ContainerId containerId,
-      RMContainerState containerState, int timeoutMillisecs) throws Exception {
+      RMContainerState containerState, int timeoutMsecs) throws Exception {
     return waitForState(Arrays.asList(nm), containerId, containerState,
-        timeoutMillisecs);
+      timeoutMsecs);
   }
-  
+
+  /**
+   * Wait until a container has reached a specified state.
+   * The timeout is 10 seconds.
+   * @param nms array of mock nodemanagers
+   * @param containerId the id of a container
+   * @param containerState the container state waited
+   * @return if reach the state before timeout; false otherwise.
+   * @throws Exception
+   *         if interrupted while waiting for the state transition
+   *         or an unexpected error while MockNM is hearbeating.
+   */
   public boolean waitForState(Collection<MockNM> nms, ContainerId containerId,
-      RMContainerState containerState, int timeoutMillisecs) throws Exception {
+      RMContainerState containerState) throws Exception {
+    return waitForState(nms, containerId, containerState,
+      TIMEOUT_MS_FOR_CONTAINER_AND_NODE);
+  }
+
+  /**
+   * Wait until a container has reached a specified state.
+   * The timeout is specified by the parameter.
+   * @param nms array of mock nodemanagers
+   * @param containerId the id of a container
+   * @param containerState the container state waited
+   * @param timeoutMsecs the length of timeout in milliseconds
+   * @return if reach the state before timeout; false otherwise.
+   * @throws Exception
+   *         if interrupted while waiting for the state transition
+   *         or an unexpected error while MockNM is hearbeating.
+   */
+  public boolean waitForState(Collection<MockNM> nms, ContainerId containerId,
+      RMContainerState containerState, int timeoutMsecs) throws Exception {
     RMContainer container = getResourceScheduler().getRMContainer(containerId);
-    int timeoutSecs = 0;
-    while(container == null && timeoutSecs++ < timeoutMillisecs / 100) {
+    int timeWaiting = 0;
+    while (container == null) {
+      if (timeWaiting >= timeoutMsecs) {
+        return false;
+      }
+
       for (MockNM nm : nms) {
         nm.nodeHeartbeat(true);
       }
       container = getResourceScheduler().getRMContainer(containerId);
       System.out.println("Waiting for container " + containerId + " to be "
           + containerState + ", container is null right now.");
-      Thread.sleep(100);
-      
-      if (timeoutMillisecs <= timeoutSecs * 100) {
+      Thread.sleep(WAIT_MS_PER_LOOP);
+      timeWaiting += WAIT_MS_PER_LOOP;
+    }
+
+    while (!containerState.equals(container.getState())) {
+      if (timeWaiting >= timeoutMsecs) {
         return false;
       }
-    }
-    Assert.assertNotNull("Container shouldn't be null", container);
-    while (!containerState.equals(container.getState())
-        && timeoutSecs++ < timeoutMillisecs / 100) {
+
       System.out.println("Container : " + containerId + " State is : "
           + container.getState() + " Waiting for state : " + containerState);
       for (MockNM nm : nms) {
         nm.nodeHeartbeat(true);
       }
-      Thread.sleep(100);
-
-      if (timeoutMillisecs <= timeoutSecs * 100) {
-        return false;
-      }
+      Thread.sleep(WAIT_MS_PER_LOOP);
+      timeWaiting += WAIT_MS_PER_LOOP;
     }
-    
+
     System.out.println("Container State is : " + container.getState());
-    Assert.assertEquals("Container state is not correct (timedout)",
-      containerState, container.getState());
     return true;
   }
 
@@ -569,6 +661,7 @@ public class MockRM extends ResourceManager {
   public MockNM registerNode(String nodeIdStr, int memory) throws Exception {
     MockNM nm = new MockNM(nodeIdStr, memory, getResourceTrackerService());
     nm.registerNode();
+    drainEvents();
     return nm;
   }
 
@@ -577,6 +670,7 @@ public class MockRM extends ResourceManager {
     MockNM nm =
         new MockNM(nodeIdStr, memory, vCores, getResourceTrackerService());
     nm.registerNode();
+    drainEvents();
     return nm;
   }
   
@@ -586,6 +680,7 @@ public class MockRM extends ResourceManager {
         new MockNM(nodeIdStr, memory, vCores, getResourceTrackerService(),
             YarnVersionInfo.getVersion());
     nm.registerNode(runningApplications);
+    drainEvents();
     return nm;
   }
 
@@ -601,16 +696,30 @@ public class MockRM extends ResourceManager {
     node.handle(new RMNodeEvent(nm.getNodeId(), RMNodeEventType.EXPIRE));
   }
 
-  public void NMwaitForState(NodeId nodeid, NodeState finalState)
-      throws Exception {
-    RMNode node = getRMContext().getRMNodes().get(nodeid);
+  /**
+   * Wait until a node has reached a specified state.
+   * The timeout is 10 seconds.
+   * @param nodeId the id of a node
+   * @param finalState the node state waited
+   * @throws InterruptedException
+   *         if interrupted while waiting for the state transition
+   */
+  public void waitForState(NodeId nodeId, NodeState finalState)
+      throws InterruptedException {
+    RMNode node = getRMContext().getRMNodes().get(nodeId);
     Assert.assertNotNull("node shouldn't be null", node);
-    int timeoutSecs = 0;
-    while (!finalState.equals(node.getState()) && timeoutSecs++ < 20) {
+    int timeWaiting = 0;
+    while (!finalState.equals(node.getState())) {
+      if (timeWaiting >= TIMEOUT_MS_FOR_CONTAINER_AND_NODE) {
+        break;
+      }
+
       System.out.println("Node State is : " + node.getState()
           + " Waiting for state : " + finalState);
-      Thread.sleep(500);
+      Thread.sleep(WAIT_MS_PER_LOOP);
+      timeWaiting += WAIT_MS_PER_LOOP;
     }
+
     System.out.println("Node State is : " + node.getState());
     Assert.assertEquals("Node state is not correct (timedout)", finalState,
         node.getState());
@@ -634,7 +743,7 @@ public class MockRM extends ResourceManager {
   public MockAM sendAMLaunched(ApplicationAttemptId appAttemptId)
       throws Exception {
     MockAM am = new MockAM(getRMContext(), masterService, appAttemptId);
-    am.waitForState(RMAppAttemptState.ALLOCATED);
+    waitForState(appAttemptId, RMAppAttemptState.ALLOCATED);
     //create and set AMRMToken
     Token<AMRMTokenIdentifier> amrmToken =
         this.rmContext.getAMRMTokenSecretManager().createAndGetAMRMToken(
@@ -653,7 +762,7 @@ public class MockRM extends ResourceManager {
   public void sendAMLaunchFailed(ApplicationAttemptId appAttemptId)
       throws Exception {
     MockAM am = new MockAM(getRMContext(), masterService, appAttemptId);
-    am.waitForState(RMAppAttemptState.ALLOCATED);
+    waitForState(am.getApplicationAttemptId(), RMAppAttemptState.ALLOCATED);
     getRMContext().getDispatcher().getEventHandler()
         .handle(new RMAppAttemptEvent(appAttemptId,
             RMAppAttemptEventType.LAUNCH_FAILED, "Failed"));
@@ -703,6 +812,21 @@ public class MockRM extends ResourceManager {
 
   @Override
   protected ApplicationMasterService createApplicationMasterService() {
+    if (this.rmContext.getYarnConfiguration().getBoolean(
+        YarnConfiguration.DIST_SCHEDULING_ENABLED,
+        YarnConfiguration.DIST_SCHEDULING_ENABLED_DEFAULT)) {
+      return new DistributedSchedulingService(getRMContext(), scheduler) {
+        @Override
+        protected void serviceStart() {
+          // override to not start rpc handler
+        }
+
+        @Override
+        protected void serviceStop() {
+          // don't do anything
+        }
+      };
+    }
     return new ApplicationMasterService(getRMContext(), scheduler) {
       @Override
       protected void serviceStart() {
@@ -788,9 +912,9 @@ public class MockRM extends ResourceManager {
         FinishApplicationMasterRequest.newInstance(
           FinalApplicationStatus.SUCCEEDED, "", "");
     am.unregisterAppAttempt(req,true);
-    am.waitForState(RMAppAttemptState.FINISHING);
+    rm.waitForState(am.getApplicationAttemptId(), RMAppAttemptState.FINISHING);
     nm.nodeHeartbeat(am.getApplicationAttemptId(), 1, ContainerState.COMPLETE);
-    am.waitForState(RMAppAttemptState.FINISHED);
+    rm.waitForState(am.getApplicationAttemptId(), RMAppAttemptState.FINISHED);
     rm.waitForState(rmApp.getApplicationId(), RMAppState.FINISHED);
   }
 
@@ -819,6 +943,20 @@ public class MockRM extends ResourceManager {
     System.out.println("Launch AM " + attempt.getAppAttemptId());
     nm.nodeHeartbeat(true);
     MockAM am = rm.sendAMLaunched(attempt.getAppAttemptId());
+    rm.waitForState(attempt.getAppAttemptId(), RMAppAttemptState.LAUNCHED);
+    return am;
+  }
+
+  public static MockAM launchUAM(RMApp app, MockRM rm, MockNM nm)
+      throws Exception {
+    // UAMs go directly to LAUNCHED state
+    rm.waitForState(app.getApplicationId(), RMAppState.ACCEPTED);
+    RMAppAttempt attempt = app.getCurrentAppAttempt();
+    waitForSchedulerAppAttemptAdded(attempt.getAppAttemptId(), rm);
+    System.out.println("Launch AM " + attempt.getAppAttemptId());
+    nm.nodeHeartbeat(true);
+    MockAM am = new MockAM(rm.getRMContext(), rm.masterService,
+        attempt.getAppAttemptId());
     rm.waitForState(attempt.getAppAttemptId(), RMAppAttemptState.LAUNCHED);
     return am;
   }
@@ -867,11 +1005,11 @@ public class MockRM extends ResourceManager {
     return activeServices;
   }
 
-  public void signalContainer(ContainerId containerId, SignalContainerCommand command)
-      throws Exception {
+  public void signalToContainer(ContainerId containerId,
+      SignalContainerCommand command) throws Exception {
     ApplicationClientProtocol client = getClientRMService();
     SignalContainerRequest req =
         SignalContainerRequest.newInstance(containerId, command);
-    client.signalContainer(req);
+    client.signalToContainer(req);
   }
 }

@@ -20,6 +20,7 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.authentication.server.AuthenticationFilter;
 import org.apache.hadoop.security.ssl.KeyStoreTestUtil;
 import org.apache.hadoop.security.ssl.SSLFactory;
+import org.apache.hadoop.test.GenericTestUtils;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -37,8 +38,8 @@ import java.net.HttpCookie;
 import java.util.List;
 
 public class TestHttpCookieFlag {
-  private static final String BASEDIR = System.getProperty("test.build.dir",
-          "target/test-dir") + "/" + TestHttpCookieFlag.class.getSimpleName();
+  private static final String BASEDIR =
+      GenericTestUtils.getTempPath(TestHttpCookieFlag.class.getSimpleName());
   private static String keystoresDir;
   private static String sslConfDir;
   private static SSLFactory clientSslFactory;
@@ -102,7 +103,10 @@ public class TestHttpCookieFlag {
                     sslConf.get("ssl.server.keystore.type", "jks"))
             .trustStore(sslConf.get("ssl.server.truststore.location"),
                     sslConf.get("ssl.server.truststore.password"),
-                    sslConf.get("ssl.server.truststore.type", "jks")).build();
+                    sslConf.get("ssl.server.truststore.type", "jks"))
+            .excludeCiphers(
+                    sslConf.get("ssl.server.exclude.cipher.list"))
+            .build();
     server.addServlet("echo", "/echo", TestHttpServer.EchoServlet.class);
     server.start();
   }

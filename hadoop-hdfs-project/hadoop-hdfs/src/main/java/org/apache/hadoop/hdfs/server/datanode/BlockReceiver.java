@@ -187,12 +187,18 @@ class BlockReceiver implements Closeable {
       this.maxSendIdleTime = (long) (readTimeout * 0.9);
       if (LOG.isDebugEnabled()) {
         LOG.debug(getClass().getSimpleName() + ": " + block
-            + "\n  isClient  =" + isClient + ", clientname=" + clientname
-            + "\n  isDatanode=" + isDatanode + ", srcDataNode=" + srcDataNode
-            + "\n  inAddr=" + inAddr + ", myAddr=" + myAddr
-            + "\n  cachingStrategy = " + cachingStrategy
-            + "\n  pinning=" + pinning
-            );
+            + "\n storageType=" + storageType + ", inAddr=" + inAddr
+            + ", myAddr=" + myAddr + "\n stage=" + stage + ", newGs=" + newGs
+            + ", minBytesRcvd=" + minBytesRcvd
+            + ", maxBytesRcvd=" + maxBytesRcvd + "\n clientname=" + clientname
+            + ", srcDataNode=" + srcDataNode
+            + ", datanode=" + datanode.getDisplayName()
+            + "\n requestedChecksum=" + requestedChecksum
+            + "\n cachingStrategy=" + cachingStrategy
+            + "\n allowLazyPersist=" + allowLazyPersist + ", pinning=" + pinning
+            + ", isClient=" + isClient + ", isDatanode=" + isDatanode
+            + ", responseInterval=" + responseInterval
+        );
       }
 
       //
@@ -296,8 +302,8 @@ class BlockReceiver implements Closeable {
   /** Return the datanode object. */
   DataNode getDataNode() {return datanode;}
 
-  String getStorageUuid() {
-    return replicaInfo.getStorageUuid();
+  Replica getReplica() {
+    return replicaInfo;
   }
 
   /**
@@ -568,6 +574,8 @@ class BlockReceiver implements Closeable {
     if (mirrorOut != null && !mirrorError) {
       try {
         long begin = Time.monotonicNow();
+        // For testing. Normally no-op.
+        DataNodeFaultInjector.get().stopSendingPacketDownstream();
         packetReceiver.mirrorPacketTo(mirrorOut);
         mirrorOut.flush();
         long now = Time.monotonicNow();
@@ -881,6 +889,9 @@ class BlockReceiver implements Closeable {
   }
   
   public void sendOOB() throws IOException, InterruptedException {
+    if (isDatanode) {
+      return;
+    }
     ((PacketResponder) responder.getRunnable()).sendOOBResponse(PipelineAck
         .getRestartOOBStatus());
   }
@@ -1151,7 +1162,7 @@ class BlockReceiver implements Closeable {
 
       final StringBuilder b = new StringBuilder(getClass().getSimpleName())
           .append(": ").append(block).append(", type=").append(type);
-      if (type != PacketResponderType.HAS_DOWNSTREAM_IN_PIPELINE) {
+      if (type == PacketResponderType.HAS_DOWNSTREAM_IN_PIPELINE) {
         b.append(", downstreams=").append(downstreams.length)
             .append(":").append(Arrays.asList(downstreams));
       }
@@ -1433,8 +1444,8 @@ class BlockReceiver implements Closeable {
         datanode.data.setPinning(block);
       }
       
-      datanode.closeBlock(
-          block, DataNode.EMPTY_DEL_HINT, replicaInfo.getStorageUuid());
+      datanode.closeBlock(block, null, replicaInfo.getStorageUuid(),
+          replicaInfo.isOnTransientStorage());
       if (ClientTraceLog.isInfoEnabled() && isClient) {
         long offset = 0;
         DatanodeRegistration dnR = datanode.getDNRegistrationForBP(block

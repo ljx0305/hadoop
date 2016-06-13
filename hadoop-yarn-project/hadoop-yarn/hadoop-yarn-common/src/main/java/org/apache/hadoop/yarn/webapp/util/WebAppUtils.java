@@ -24,6 +24,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.apache.hadoop.classification.InterfaceAudience.Private;
@@ -33,9 +34,14 @@ import org.apache.hadoop.http.HttpConfig.Policy;
 import org.apache.hadoop.http.HttpServer2;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.conf.HAUtil;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
+import org.apache.hadoop.yarn.factories.RecordFactory;
+import org.apache.hadoop.yarn.util.ConverterUtils;
 import org.apache.hadoop.yarn.util.RMHAUtils;
+import org.apache.hadoop.yarn.webapp.BadRequestException;
+import org.apache.hadoop.yarn.webapp.NotFoundException;
 
 @Private
 @Evolving
@@ -352,7 +358,9 @@ public class WebAppUtils {
             sslConf.get("ssl.server.keystore.type", "jks"))
         .trustStore(sslConf.get("ssl.server.truststore.location"),
             getPassword(sslConf, WEB_APP_TRUSTSTORE_PASSWORD_KEY),
-            sslConf.get("ssl.server.truststore.type", "jks"));
+            sslConf.get("ssl.server.truststore.type", "jks"))
+        .excludeCiphers(
+            sslConf.get("ssl.server.exclude.cipher.list"));
   }
 
   /**
@@ -375,5 +383,39 @@ public class WebAppUtils {
       password = null;
     }
     return password;
+  }
+
+  public static ApplicationId parseApplicationId(RecordFactory recordFactory,
+      String appId) {
+    if (appId == null || appId.isEmpty()) {
+      throw new NotFoundException("appId, " + appId + ", is empty or null");
+    }
+    ApplicationId aid = null;
+    try {
+      aid = ConverterUtils.toApplicationId(recordFactory, appId);
+    } catch (Exception e) {
+      throw new BadRequestException(e);
+    }
+    if (aid == null) {
+      throw new NotFoundException("app with id " + appId + " not found");
+    }
+    return aid;
+  }
+
+  public static String getSupportedLogContentType(String format) {
+    if (format.equalsIgnoreCase("text")) {
+      return "text/plain";
+    } else if (format.equalsIgnoreCase("octet-stream")) {
+      return "application/octet-stream";
+    }
+    return null;
+  }
+
+  public static String getDefaultLogContentType() {
+    return "text/plain";
+  }
+
+  public static List<String> listSupportedLogContentType() {
+    return Arrays.asList("text", "octet-stream");
   }
 }

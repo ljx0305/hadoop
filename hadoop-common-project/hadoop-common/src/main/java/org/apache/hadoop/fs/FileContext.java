@@ -761,7 +761,7 @@ public class FileContext {
       @Override
       public Boolean next(final AbstractFileSystem fs, final Path p) 
         throws IOException, UnresolvedLinkException {
-        return Boolean.valueOf(fs.delete(p, recursive));
+        return fs.delete(p, recursive);
       }
     }.resolve(this, absF);
   }
@@ -895,7 +895,7 @@ public class FileContext {
       @Override
       public Boolean next(final AbstractFileSystem fs, final Path p) 
         throws IOException, UnresolvedLinkException {
-        return Boolean.valueOf(fs.setReplication(p, replication));
+        return fs.setReplication(p, replication);
       }
     }.resolve(this, absF);
   }
@@ -2690,6 +2690,23 @@ public class FileContext {
       public Void next(final AbstractFileSystem fs, final Path p)
           throws IOException {
         fs.setStoragePolicy(path, policyName);
+        return null;
+      }
+    }.resolve(this, absF);
+  }
+
+  /**
+   * Unset the storage policy set for a given file or directory.
+   * @param src file or directory path.
+   * @throws IOException
+   */
+  public void unsetStoragePolicy(final Path src) throws IOException {
+    final Path absF = fixRelativePart(src);
+    new FSLinkResolver<Void>() {
+      @Override
+      public Void next(final AbstractFileSystem fs, final Path p)
+          throws IOException {
+        fs.unsetStoragePolicy(src);
         return null;
       }
     }.resolve(this, absF);

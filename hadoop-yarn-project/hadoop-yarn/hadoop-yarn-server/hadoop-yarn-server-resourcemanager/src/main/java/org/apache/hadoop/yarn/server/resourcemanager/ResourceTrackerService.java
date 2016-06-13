@@ -21,10 +21,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -62,6 +66,7 @@ import org.apache.hadoop.yarn.server.api.records.MasterKey;
 import org.apache.hadoop.yarn.server.api.records.NodeAction;
 import org.apache.hadoop.yarn.server.api.records.NodeStatus;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.NodeLabelsUtils;
+import org.apache.hadoop.yarn.server.resourcemanager.resource.DynamicResourceConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttempt;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.event.RMAppAttemptContainerFinishedEvent;
@@ -95,6 +100,9 @@ public class ResourceTrackerService extends AbstractService implements
   private final RMContainerTokenSecretManager containerTokenSecretManager;
   private final NMTokenSecretManagerInRM nmTokenSecretManager;
 
+  private final ReadLock readLock;
+  private final WriteLock writeLock;
+
   private long nextHeartBeatInterval;
   private Server server;
   private InetSocketAddress resourceTrackerAddress;
@@ -105,6 +113,7 @@ public class ResourceTrackerService extends AbstractService implements
 
   private boolean isDistributedNodeLabelsConf;
   private boolean isDelegatedCentralizedNodeLabelsConf;
+  private DynamicResourceConfiguration drConf;
 
   public ResourceTrackerService(RMContext rmContext,
       NodesListManager nodesListManager,
@@ -117,7 +126,9 @@ public class ResourceTrackerService extends AbstractService implements
     this.nmLivelinessMonitor = nmLivelinessMonitor;
     this.containerTokenSecretManager = containerTokenSecretManager;
     this.nmTokenSecretManager = nmTokenSecretManager;
-
+    ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    this.readLock = lock.readLock();
+    this.writeLock = lock.writeLock();
   }
 
   @Override
@@ -139,11 +150,11 @@ public class ResourceTrackerService extends AbstractService implements
     }
 
     minAllocMb = conf.getInt(
-    	YarnConfiguration.RM_SCHEDULER_MINIMUM_ALLOCATION_MB,
-    	YarnConfiguration.DEFAULT_RM_SCHEDULER_MINIMUM_ALLOCATION_MB);
+        YarnConfiguration.RM_SCHEDULER_MINIMUM_ALLOCATION_MB,
+        YarnConfiguration.DEFAULT_RM_SCHEDULER_MINIMUM_ALLOCATION_MB);
     minAllocVcores = conf.getInt(
-    	YarnConfiguration.RM_SCHEDULER_MINIMUM_ALLOCATION_VCORES,
-    	YarnConfiguration.DEFAULT_RM_SCHEDULER_MINIMUM_ALLOCATION_VCORES);
+        YarnConfiguration.RM_SCHEDULER_MINIMUM_ALLOCATION_VCORES,
+        YarnConfiguration.DEFAULT_RM_SCHEDULER_MINIMUM_ALLOCATION_VCORES);
 
     minimumNodeManagerVersion = conf.get(
         YarnConfiguration.RM_NODEMANAGER_MINIMUM_VERSION,
@@ -156,7 +167,47 @@ public class ResourceTrackerService extends AbstractService implements
           YarnConfiguration.isDelegatedCentralizedNodeLabelConfiguration(conf);
     }
 
+    loadDynamicResourceConfiguration(conf);
     super.serviceInit(conf);
+  }
+
+  /**
+   * Load DynamicResourceConfiguration from dynamic-resources.xml.
+   * @param conf
+   * @throws IOException
+   */
+  public void loadDynamicResourceConfiguration(Configuration conf)
+      throws IOException {
+    try {
+      // load dynamic-resources.xml
+      InputStream drInputStream = this.rmContext.getConfigurationProvider()
+          .getConfigurationInputStream(conf,
+          YarnConfiguration.DR_CONFIGURATION_FILE);
+      // write lock here on drConfig is unnecessary as here get called at
+      // ResourceTrackerService get initiated and other read and write
+      // operations haven't started yet.
+      if (drInputStream != null) {
+        this.drConf = new DynamicResourceConfiguration(conf, drInputStream);
+      } else {
+        this.drConf = new DynamicResourceConfiguration(conf);
+      }
+    } catch (Exception e) {
+      throw new IOException(e);
+    }
+  }
+
+  /**
+   * Update DynamicResourceConfiguration with new configuration.
+   * @param conf
+   */
+  public void updateDynamicResourceConfiguration(
+      DynamicResourceConfiguration conf) {
+    this.writeLock.lock();
+    try {
+      this.drConf = conf;
+    } finally {
+      this.writeLock.unlock();
+    }
   }
 
   @Override
@@ -166,15 +217,14 @@ public class ResourceTrackerService extends AbstractService implements
     // security is enabled, so no secretManager.
     Configuration conf = getConfig();
     YarnRPC rpc = YarnRPC.create(conf);
-    this.server =
-      rpc.getServer(ResourceTracker.class, this, resourceTrackerAddress,
-          conf, null,
-          conf.getInt(YarnConfiguration.RM_RESOURCE_TRACKER_CLIENT_THREAD_COUNT, 
-              YarnConfiguration.DEFAULT_RM_RESOURCE_TRACKER_CLIENT_THREAD_COUNT));
-    
+    this.server = rpc.getServer(
+        ResourceTracker.class, this, resourceTrackerAddress, conf, null,
+        conf.getInt(YarnConfiguration.RM_RESOURCE_TRACKER_CLIENT_THREAD_COUNT,
+            YarnConfiguration.DEFAULT_RM_RESOURCE_TRACKER_CLIENT_THREAD_COUNT));
+
     // Enable service authorization?
     if (conf.getBoolean(
-        CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHORIZATION, 
+        CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHORIZATION,
         false)) {
       InputStream inputStream =
           this.rmContext.getConfigurationProvider()
@@ -185,12 +235,12 @@ public class ResourceTrackerService extends AbstractService implements
       }
       refreshServiceAcls(conf, RMPolicyProvider.getInstance());
     }
- 
+
     this.server.start();
     conf.updateConnectAddr(YarnConfiguration.RM_BIND_HOST,
-			   YarnConfiguration.RM_RESOURCE_TRACKER_ADDRESS,
-			   YarnConfiguration.DEFAULT_RM_RESOURCE_TRACKER_ADDRESS,
-                           server.getListenerAddress());
+        YarnConfiguration.RM_RESOURCE_TRACKER_ADDRESS,
+        YarnConfiguration.DEFAULT_RM_RESOURCE_TRACKER_ADDRESS,
+        server.getListenerAddress());
   }
 
   @Override
@@ -198,6 +248,7 @@ public class ResourceTrackerService extends AbstractService implements
     if (this.server != null) {
       this.server.stop();
     }
+
     super.serviceStop();
   }
 
@@ -295,8 +346,23 @@ public class ResourceTrackerService extends AbstractService implements
       return response;
     }
 
+    // check if node's capacity is load from dynamic-resources.xml
+    String nid = nodeId.toString();
+
+    Resource dynamicLoadCapability = loadNodeResourceFromDRConfiguration(nid);
+    if (dynamicLoadCapability != null) {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Resource for node: " + nid + " is adjusted from: " +
+            capability + " to: " + dynamicLoadCapability +
+            " due to settings in dynamic-resources.xml.");
+      }
+      capability = dynamicLoadCapability;
+      // sync back with new resource.
+      response.setResource(capability);
+    }
+
     // Check if this node has minimum allocations
-    if (capability.getMemory() < minAllocMb
+    if (capability.getMemorySize() < minAllocMb
         || capability.getVirtualCores() < minAllocVcores) {
       String message =
           "NodeManager from  " + host
@@ -311,7 +377,7 @@ public class ResourceTrackerService extends AbstractService implements
     response.setContainerTokenMasterKey(containerTokenSecretManager
         .getCurrentKey());
     response.setNMTokenMasterKey(nmTokenSecretManager
-        .getCurrentKey());    
+        .getCurrentKey());
 
     RMNode rmNode = new RMNodeImpl(nodeId, rmContext, host, cmPort, httpPort,
         resolve(host), capability, nodeManagerVersion);
@@ -488,6 +554,22 @@ public class ResourceTrackerService extends AbstractService implements
       }
     }
 
+    // 6. check if node's capacity is load from dynamic-resources.xml
+    // if so, send updated resource back to NM.
+    String nid = nodeId.toString();
+    Resource capability = loadNodeResourceFromDRConfiguration(nid);
+    // sync back with new resource if not null.
+    if (capability != null) {
+      nodeHeartBeatResponse.setResource(capability);
+    }
+
+    // 7. Send Container Queuing Limits back to the Node. This will be used by
+    // the node to truncate the number of Containers queued for execution.
+    if (this.rmContext.getNodeManagerQueueLimitCalculator() != null) {
+      nodeHeartBeatResponse.setContainerQueuingLimit(
+          this.rmContext.getNodeManagerQueueLimitCalculator()
+              .createContainerQueuingLimit());
+    }
     return nodeHeartBeatResponse;
   }
 
@@ -571,6 +653,22 @@ public class ResourceTrackerService extends AbstractService implements
         && (request.getLastKnownNMTokenMasterKey().getKeyId() 
             != nextMasterKeyForNode.getKeyId())) {
       nodeHeartBeatResponse.setNMTokenMasterKey(nextMasterKeyForNode);
+    }
+  }
+
+  private Resource loadNodeResourceFromDRConfiguration(String nodeId) {
+    // check if node's capacity is loaded from dynamic-resources.xml
+    this.readLock.lock();
+    try {
+      String[] nodes = this.drConf.getNodes();
+      if (nodes != null && Arrays.asList(nodes).contains(nodeId)) {
+        return Resource.newInstance(this.drConf.getMemoryPerNode(nodeId),
+            this.drConf.getVcoresPerNode(nodeId));
+      } else {
+        return null;
+      }
+    } finally {
+      this.readLock.unlock();
     }
   }
 

@@ -58,10 +58,13 @@ import org.apache.hadoop.hdfs.server.protocol.DatanodeStorage;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.CloseableReferenceCount;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Time;
 import org.apache.hadoop.util.Timer;
 import org.codehaus.jackson.annotate.JsonProperty;
 import org.codehaus.jackson.map.ObjectMapper;
+import org.codehaus.jackson.map.ObjectReader;
+import org.codehaus.jackson.map.ObjectWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -80,6 +83,10 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
 public class FsVolumeImpl implements FsVolumeSpi {
   public static final Logger LOG =
       LoggerFactory.getLogger(FsVolumeImpl.class);
+  private static final ObjectWriter WRITER =
+      new ObjectMapper().writerWithDefaultPrettyPrinter();
+  private static final ObjectReader READER =
+      new ObjectMapper().reader(BlockIteratorState.class);
 
   private final FsDatasetImpl dataset;
   private final String storageID;
@@ -112,9 +119,10 @@ public class FsVolumeImpl implements FsVolumeSpi {
       Configuration conf, StorageType storageType) throws IOException {
     this.dataset = dataset;
     this.storageID = storageID;
-    this.reserved = conf.getLong(
+    this.reserved = conf.getLong(DFSConfigKeys.DFS_DATANODE_DU_RESERVED_KEY
+        + "." + StringUtils.toLowerCase(storageType.toString()), conf.getLong(
         DFSConfigKeys.DFS_DATANODE_DU_RESERVED_KEY,
-        DFSConfigKeys.DFS_DATANODE_DU_RESERVED_DEFAULT);
+        DFSConfigKeys.DFS_DATANODE_DU_RESERVED_DEFAULT));
     this.reservedForReplicas = new AtomicLong(0L);
     this.currentDir = currentDir;
     File parent = currentDir.getParentFile();
@@ -234,30 +242,37 @@ public class FsVolumeImpl implements FsVolumeSpi {
     Preconditions.checkState(reference.getReferenceCount() > 0);
   }
 
+  @VisibleForTesting
+  int getReferenceCount() {
+    return this.reference.getReferenceCount();
+  }
+
   /**
-   * Close this volume and wait all other threads to release the reference count
-   * on this volume.
-   * @throws IOException if the volume is closed or the waiting is interrupted.
+   * Close this volume.
+   * @throws IOException if the volume is closed.
    */
-  void closeAndWait() throws IOException {
+  void setClosed() throws IOException {
     try {
       this.reference.setClosed();
+      dataset.stopAllDataxceiverThreads(this);
     } catch (ClosedChannelException e) {
       throw new IOException("The volume has already closed.", e);
     }
-    final int SLEEP_MILLIS = 500;
-    while (this.reference.getReferenceCount() > 0) {
+  }
+
+  /**
+   * Check whether this volume has successfully been closed.
+   */
+  boolean checkClosed() {
+    if (this.reference.getReferenceCount() > 0) {
       if (FsDatasetImpl.LOG.isDebugEnabled()) {
         FsDatasetImpl.LOG.debug(String.format(
             "The reference count for %s is %d, wait to be 0.",
             this, reference.getReferenceCount()));
       }
-      try {
-        Thread.sleep(SLEEP_MILLIS);
-      } catch (InterruptedException e) {
-        throw new IOException(e);
-      }
+      return false;
     }
+    return true;
   }
 
   File getCurrentDir() {
@@ -277,21 +292,35 @@ public class FsVolumeImpl implements FsVolumeSpi {
   }
 
   void onBlockFileDeletion(String bpid, long value) {
-    decDfsUsed(bpid, value);
+    decDfsUsedAndNumBlocks(bpid, value, true);
     if (isTransientStorage()) {
       dataset.releaseLockedMemory(value, true);
     }
   }
 
   void onMetaFileDeletion(String bpid, long value) {
-    decDfsUsed(bpid, value);
+    decDfsUsedAndNumBlocks(bpid, value, false);
   }
 
-  private void decDfsUsed(String bpid, long value) {
+  private void decDfsUsedAndNumBlocks(String bpid, long value,
+                                      boolean blockFileDeleted) {
     synchronized(dataset) {
       BlockPoolSlice bp = bpSlices.get(bpid);
       if (bp != null) {
         bp.decDfsUsed(value);
+        if (blockFileDeleted) {
+          bp.decrNumBlocks();
+        }
+      }
+    }
+  }
+
+  void incDfsUsedAndNumBlocks(String bpid, long value) {
+    synchronized (dataset) {
+      BlockPoolSlice bp = bpSlices.get(bpid);
+      if (bp != null) {
+        bp.incDfsUsed(value);
+        bp.incrNumBlocks();
       }
     }
   }
@@ -670,6 +699,18 @@ public class FsVolumeImpl implements FsVolumeSpi {
             } else {
               ExtendedBlock block =
                   new ExtendedBlock(bpid, Block.filename2id(state.curEntry));
+              File expectedBlockDir = DatanodeUtil.idToBlockDir(
+                  new File("."), block.getBlockId());
+              File actualBlockDir = Paths.get(".",
+                  state.curFinalizedDir, state.curFinalizedSubDir).toFile();
+              if (!expectedBlockDir.equals(actualBlockDir)) {
+                LOG.error("nextBlock({}, {}): block id {} found in invalid " +
+                    "directory.  Expected directory: {}.  " +
+                    "Actual directory: {}", storageID, bpid,
+                    block.getBlockId(), expectedBlockDir.getPath(),
+                    actualBlockDir.getPath());
+                continue;
+              }
               LOG.trace("nextBlock({}, {}): advancing to {}",
                   storageID, bpid, block);
               return block;
@@ -707,10 +748,9 @@ public class FsVolumeImpl implements FsVolumeSpi {
     public void save() throws IOException {
       state.lastSavedMs = Time.now();
       boolean success = false;
-      ObjectMapper mapper = new ObjectMapper();
       try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
                 new FileOutputStream(getTempSaveFile(), false), "UTF-8"))) {
-        mapper.writerWithDefaultPrettyPrinter().writeValue(writer, state);
+        WRITER.writeValue(writer, state);
         success = true;
       } finally {
         if (!success) {
@@ -724,17 +764,16 @@ public class FsVolumeImpl implements FsVolumeSpi {
           StandardCopyOption.ATOMIC_MOVE);
       if (LOG.isTraceEnabled()) {
         LOG.trace("save({}, {}): saved {}", storageID, bpid,
-            mapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
+            WRITER.writeValueAsString(state));
       }
     }
 
     public void load() throws IOException {
-      ObjectMapper mapper = new ObjectMapper();
       File file = getSaveFile();
-      this.state = mapper.reader(BlockIteratorState.class).readValue(file);
+      this.state = READER.readValue(file);
       LOG.trace("load({}, {}): loaded iterator {} from {}: {}", storageID,
           bpid, name, file.getAbsoluteFile(),
-          mapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
+          WRITER.writeValueAsString(state));
     }
 
     File getSaveFile() {
@@ -842,7 +881,15 @@ public class FsVolumeImpl implements FsVolumeSpi {
       throws IOException {
     getBlockPoolSlice(bpid).getVolumeMap(volumeMap, ramDiskReplicaMap);
   }
-  
+
+  long getNumBlocks() {
+    long numBlocks = 0;
+    for (BlockPoolSlice s : bpSlices.values()) {
+      numBlocks += s.getNumOfBlocks();
+    }
+    return numBlocks;
+  }
+
   @Override
   public String toString() {
     return currentDir.getAbsolutePath();

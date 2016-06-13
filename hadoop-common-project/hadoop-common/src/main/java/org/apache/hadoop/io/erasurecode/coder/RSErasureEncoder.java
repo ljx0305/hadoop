@@ -22,6 +22,8 @@ import org.apache.hadoop.io.erasurecode.CodecUtil;
 import org.apache.hadoop.io.erasurecode.ECBlock;
 import org.apache.hadoop.io.erasurecode.ECBlockGroup;
 import org.apache.hadoop.io.erasurecode.ECSchema;
+import org.apache.hadoop.io.erasurecode.ErasureCodeConstants;
+import org.apache.hadoop.io.erasurecode.ErasureCoderOptions;
 import org.apache.hadoop.io.erasurecode.rawcoder.RawErasureEncoder;
 
 /**
@@ -54,8 +56,11 @@ public class RSErasureEncoder extends AbstractErasureEncoder {
 
   private RawErasureEncoder checkCreateRSRawEncoder() {
     if (rawEncoder == null) {
-      rawEncoder = CodecUtil.createRSRawEncoder(getConf(),
-              getNumDataUnits(), getNumParityUnits());
+      // TODO: we should create the raw coder according to codec.
+      ErasureCoderOptions coderOptions = new ErasureCoderOptions(
+          getNumDataUnits(), getNumParityUnits());
+      rawEncoder = CodecUtil.createRawEncoder(getConf(),
+          ErasureCodeConstants.RS_DEFAULT_CODEC_NAME, coderOptions);
     }
     return rawEncoder;
   }

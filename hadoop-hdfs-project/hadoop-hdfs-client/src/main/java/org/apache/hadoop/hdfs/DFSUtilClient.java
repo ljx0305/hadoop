@@ -23,7 +23,6 @@ import com.google.common.primitives.SignedBytes;
 import org.apache.commons.io.Charsets;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.crypto.key.KeyProvider;
-import org.apache.hadoop.crypto.key.KeyProviderFactory;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
 import org.apache.hadoop.fs.FileSystem;
@@ -35,41 +34,53 @@ import org.apache.hadoop.hdfs.net.Peer;
 import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
 import org.apache.hadoop.hdfs.protocol.HdfsConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.datatransfer.IOStreamPair;
+import org.apache.hadoop.hdfs.protocol.ReconfigurationProtocol;
 import org.apache.hadoop.hdfs.protocol.datatransfer.sasl.DataEncryptionKeyFactory;
 import org.apache.hadoop.hdfs.protocol.datatransfer.sasl.SaslDataTransferClient;
 import org.apache.hadoop.hdfs.protocolPB.ClientDatanodeProtocolTranslatorPB;
+import org.apache.hadoop.hdfs.protocolPB.ReconfigurationProtocolTranslatorPB;
 import org.apache.hadoop.hdfs.security.token.block.BlockTokenIdentifier;
 import org.apache.hadoop.hdfs.util.IOUtilsClient;
 import org.apache.hadoop.hdfs.web.WebHdfsConstants;
+import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NodeBase;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
+import org.apache.hadoop.util.KMSUtil;
 import org.apache.hadoop.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.net.SocketFactory;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InterruptedIOException;
+import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.channels.SocketChannel;
 import java.text.SimpleDateFormat;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import static org.apache.hadoop.hdfs.client.HdfsClientConfigKeys.DFS_HA_NAMENODES_KEY_PREFIX;
 import static org.apache.hadoop.hdfs.client.HdfsClientConfigKeys.DFS_NAMESERVICES;
@@ -496,6 +507,23 @@ public class DFSUtilClient {
     return new ClientDatanodeProtocolTranslatorPB(addr, ticket, conf, factory);
   }
 
+  public static ReconfigurationProtocol createReconfigurationProtocolProxy(
+      InetSocketAddress addr, UserGroupInformation ticket, Configuration conf,
+      SocketFactory factory) throws IOException {
+    return new ReconfigurationProtocolTranslatorPB(addr, ticket, conf, factory);
+  }
+
+  private static String keyProviderUriKeyName =
+      HdfsClientConfigKeys.DFS_ENCRYPTION_KEY_PROVIDER_URI;
+
+  /**
+   * Set the key provider uri configuration key name for creating key providers.
+   * @param keyName The configuration key name.
+   */
+  public static void setKeyProviderUriKeyName(final String keyName) {
+    keyProviderUriKeyName = keyName;
+  }
+
   /**
    * Creates a new KeyProvider from the given Configuration.
    *
@@ -506,29 +534,7 @@ public class DFSUtilClient {
    */
   public static KeyProvider createKeyProvider(
       final Configuration conf) throws IOException {
-    final String providerUriStr =
-        conf.getTrimmed(HdfsClientConfigKeys.DFS_ENCRYPTION_KEY_PROVIDER_URI, "");
-    // No provider set in conf
-    if (providerUriStr.isEmpty()) {
-      return null;
-    }
-    final URI providerUri;
-    try {
-      providerUri = new URI(providerUriStr);
-    } catch (URISyntaxException e) {
-      throw new IOException(e);
-    }
-    KeyProvider keyProvider = KeyProviderFactory.get(providerUri, conf);
-    if (keyProvider == null) {
-      throw new IOException("Could not instantiate KeyProvider from " +
-          HdfsClientConfigKeys.DFS_ENCRYPTION_KEY_PROVIDER_URI + " setting of '"
-          + providerUriStr + "'");
-    }
-    if (keyProvider.isTransient()) {
-      throw new IOException("KeyProvider " + keyProvider.toString()
-          + " was found but it is a transient provider.");
-    }
-    return keyProvider;
+    return KMSUtil.createKeyProvider(conf, keyProviderUriKeyName);
   }
 
   public static Peer peerFromSocket(Socket socket)
@@ -569,12 +575,14 @@ public class DFSUtilClient {
   public static Peer peerFromSocketAndKey(
         SaslDataTransferClient saslClient, Socket s,
         DataEncryptionKeyFactory keyFactory,
-        Token<BlockTokenIdentifier> blockToken, DatanodeID datanodeId)
-        throws IOException {
+        Token<BlockTokenIdentifier> blockToken, DatanodeID datanodeId,
+        int socketTimeoutMs) throws IOException {
     Peer peer = null;
     boolean success = false;
     try {
       peer = peerFromSocket(s);
+      peer.setReadTimeout(socketTimeoutMs);
+      peer.setWriteTimeout(socketTimeoutMs);
       peer = saslClient.peerSend(peer, keyFactory, blockToken, datanodeId);
       success = true;
       return peer;
@@ -672,5 +680,80 @@ public class DFSUtilClient {
     final InterruptedIOException iioe = new InterruptedIOException(message);
     iioe.initCause(e);
     return iioe;
+  }
+
+  /**
+   * A utility class as a container to put corrupted blocks, shared by client
+   * and datanode.
+   */
+  public static class CorruptedBlocks {
+    private Map<ExtendedBlock, Set<DatanodeInfo>> corruptionMap;
+
+    public CorruptedBlocks() {
+      this.corruptionMap = new HashMap<>();
+    }
+
+    /**
+     * Indicate a block replica on the specified datanode is corrupted
+     */
+    public void addCorruptedBlock(ExtendedBlock blk, DatanodeInfo node) {
+      Set<DatanodeInfo> dnSet = corruptionMap.get(blk);
+      if (dnSet == null) {
+        dnSet = new HashSet<>();
+        corruptionMap.put(blk, dnSet);
+      }
+      if (!dnSet.contains(node)) {
+        dnSet.add(node);
+      }
+    }
+
+    /**
+     * @return the map that contains all the corruption entries.
+     */
+    public Map<ExtendedBlock, Set<DatanodeInfo>> getCorruptionMap() {
+      return corruptionMap;
+    }
+  }
+
+  /**
+   * Connect to the given datanode's datantrasfer port, and return
+   * the resulting IOStreamPair. This includes encryption wrapping, etc.
+   */
+  public static IOStreamPair connectToDN(DatanodeInfo dn, int timeout,
+                                         Configuration conf,
+                                         SaslDataTransferClient saslClient,
+                                         SocketFactory socketFactory,
+                                         boolean connectToDnViaHostname,
+                                         DataEncryptionKeyFactory dekFactory,
+                                         Token<BlockTokenIdentifier> blockToken)
+      throws IOException {
+
+    boolean success = false;
+    Socket sock = null;
+    try {
+      sock = socketFactory.createSocket();
+      String dnAddr = dn.getXferAddr(connectToDnViaHostname);
+      LOG.debug("Connecting to datanode {}", dnAddr);
+      NetUtils.connect(sock, NetUtils.createSocketAddr(dnAddr), timeout);
+      sock.setSoTimeout(timeout);
+
+      OutputStream unbufOut = NetUtils.getOutputStream(sock);
+      InputStream unbufIn = NetUtils.getInputStream(sock);
+      IOStreamPair pair = saslClient.newSocketSend(sock, unbufOut,
+          unbufIn, dekFactory, blockToken, dn);
+
+      IOStreamPair result = new IOStreamPair(
+          new DataInputStream(pair.in),
+          new DataOutputStream(new BufferedOutputStream(pair.out,
+              DFSUtilClient.getSmallBufferSize(conf)))
+      );
+
+      success = true;
+      return result;
+    } finally {
+      if (!success) {
+        IOUtils.closeSocket(sock);
+      }
+    }
   }
 }

@@ -63,6 +63,7 @@ import org.apache.hadoop.yarn.api.records.ReservationId;
 import org.codehaus.jackson.JsonParseException;
 import org.codehaus.jackson.map.JsonMappingException;
 import org.codehaus.jackson.map.ObjectMapper;
+import org.codehaus.jackson.map.ObjectReader;
 
 import com.google.common.base.Charsets;
 
@@ -70,6 +71,8 @@ import com.google.common.base.Charsets;
 @InterfaceStability.Unstable
 class JobSubmitter {
   protected static final Log LOG = LogFactory.getLog(JobSubmitter.class);
+  private static final ObjectReader READER =
+      new ObjectMapper().reader(Map.class);
   private static final String SHUFFLE_KEYGEN_ALGORITHM = "HmacSHA1";
   private static final int SHUFFLE_KEY_LENGTH = 64;
   private FileSystem jtFs;
@@ -196,6 +199,13 @@ class JobSubmitter {
       int maps = writeSplits(job, submitJobDir);
       conf.setInt(MRJobConfig.NUM_MAPS, maps);
       LOG.info("number of splits:" + maps);
+
+      int maxMaps = conf.getInt(MRJobConfig.JOB_MAX_MAP,
+          MRJobConfig.DEFAULT_JOB_MAX_MAP);
+      if (maxMaps >= 0 && maxMaps < maps) {
+        throw new IllegalArgumentException("The number of map tasks " + maps +
+            " exceeded limit " + maxMaps);
+      }
 
       // write "queue admins of the queue to which job is being submitted"
       // to job file.
@@ -396,9 +406,7 @@ class JobSubmitter {
       boolean json_error = false;
       try {
         // read JSON
-        ObjectMapper mapper = new ObjectMapper();
-        Map<String, String> nm = 
-          mapper.readValue(new File(localFileName), Map.class);
+        Map<String, String> nm = READER.readValue(new File(localFileName));
 
         for(Map.Entry<String, String> ent: nm.entrySet()) {
           credentials.addSecretKey(new Text(ent.getKey()), ent.getValue()

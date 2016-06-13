@@ -20,11 +20,11 @@
 
 # KMS temporary directory
 #
-# export KMS_TEMP=${HADOOP_PREFIX}/temp
+# export KMS_TEMP=${HADOOP_HOME}/temp
 
 # The HTTP port used by KMS
 #
-# export KMS_HTTP_PORT=16000
+# export KMS_HTTP_PORT=9600
 
 # The Admin port used by KMS
 #
@@ -33,6 +33,10 @@
 # The maximum number of Tomcat handler threads
 #
 # export KMS_MAX_THREADS=1000
+
+# The maximum size of Tomcat HTTP header
+#
+# export KMS_MAX_HTTP_HEADER_SIZE=65536
 
 # The location of the SSL keystore if using SSL
 #
@@ -55,7 +59,7 @@
 #
 # Location of tomcat
 #
-# export KMS_CATALINA_HOME=${HADOOP_PREFIX}/share/hadoop/kms/tomcat
+# export KMS_CATALINA_HOME=${HADOOP_HOME}/share/hadoop/kms/tomcat
 
 # Java System properties for KMS should be specified in this variable.
 # The java.library.path and hadoop.home.dir properties are automatically

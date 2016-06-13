@@ -23,7 +23,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -31,6 +30,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileContext;
 import org.apache.hadoop.fs.UnsupportedFileSystemException;
 import org.apache.hadoop.service.AbstractService;
+import org.apache.hadoop.util.concurrent.HadoopExecutors;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.event.Dispatcher;
 import org.apache.hadoop.yarn.event.EventHandler;
@@ -65,7 +65,7 @@ public class ContainersLauncher extends AbstractService
   private LocalDirsHandlerService dirsHandler;
   @VisibleForTesting
   public ExecutorService containerLauncher =
-    Executors.newCachedThreadPool(
+      HadoopExecutors.newCachedThreadPool(
         new ThreadFactoryBuilder()
           .setNameFormat("ContainersLauncher #%d")
           .build());
@@ -117,6 +117,16 @@ public class ContainersLauncher extends AbstractService
               event.getContainer(), dirsHandler, containerManager);
         containerLauncher.submit(launch);
         running.put(containerId, launch);
+        break;
+      case RELAUNCH_CONTAINER:
+        app = context.getApplications().get(
+                containerId.getApplicationAttemptId().getApplicationId());
+
+        ContainerRelaunch relaunch =
+            new ContainerRelaunch(context, getConfig(), dispatcher, exec, app,
+                event.getContainer(), dirsHandler, containerManager);
+        containerLauncher.submit(relaunch);
+        running.put(containerId, relaunch);
         break;
       case RECOVER_CONTAINER:
         app = context.getApplications().get(

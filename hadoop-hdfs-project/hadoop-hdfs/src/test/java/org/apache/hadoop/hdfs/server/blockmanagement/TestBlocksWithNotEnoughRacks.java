@@ -19,7 +19,6 @@
 package org.apache.hadoop.hdfs.server.blockmanagement;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertArrayEquals;
 
 import java.util.ArrayList;
@@ -39,6 +38,7 @@ import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.NameNodeAdapter;
+import org.apache.hadoop.hdfs.util.HostsFileWriter;
 import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.log4j.Level;
 import org.junit.Test;
@@ -68,7 +68,7 @@ public class TestBlocksWithNotEnoughRacks {
 
     // Have the NN check for pending replications every second so it
     // quickly schedules additional replicas as they are identified.
-    conf.setInt(DFSConfigKeys.DFS_NAMENODE_REPLICATION_PENDING_TIMEOUT_SEC_KEY, 1);
+    conf.setInt(DFSConfigKeys.DFS_NAMENODE_RECONSTRUCTION_PENDING_TIMEOUT_SEC_KEY, 1);
 
     // The DNs report blocks every second.
     conf.setLong(DFSConfigKeys.DFS_BLOCKREPORT_INTERVAL_MSEC_KEY, 1000L);
@@ -285,7 +285,7 @@ public class TestBlocksWithNotEnoughRacks {
     final DatanodeManager dm = ns.getBlockManager().getDatanodeManager();
 
     try {
-      // Create a file with one block with a replication factor of 2
+      // Create a file with one block with a replication factor of 3
       final FileSystem fs = cluster.getFileSystem();
       DFSTestUtil.createFile(fs, filePath, 1L, REPLICATION_FACTOR, 1L);
       ExtendedBlock b = DFSTestUtil.getFirstBlock(fs, filePath);
@@ -315,8 +315,9 @@ public class TestBlocksWithNotEnoughRacks {
       dm.removeDatanode(dnId);
 
       // Make sure we have enough live replicas even though we are
-      // short one rack and therefore need one replica
-      DFSTestUtil.waitForReplication(cluster, b, 1, REPLICATION_FACTOR, 1);
+      // short one rack. The cluster now has only 1 rack thus we just make sure
+      // we still have 3 replicas.
+      DFSTestUtil.waitForReplication(cluster, b, 1, REPLICATION_FACTOR, 0);
     } finally {
       cluster.shutdown();
     }
@@ -357,9 +358,8 @@ public class TestBlocksWithNotEnoughRacks {
 
       // The block gets re-replicated to another datanode so it has a 
       // sufficient # replicas, but not across racks, so there should
-      // be 1 rack, and 1 needed replica (even though there are 2 hosts 
-      // available and only 2 replicas required).
-      DFSTestUtil.waitForReplication(cluster, b, 1, REPLICATION_FACTOR, 1);
+      // be 1 rack.
+      DFSTestUtil.waitForReplication(cluster, b, 1, REPLICATION_FACTOR, 0);
 
       // Start the "failed" datanode, which has a replica so the block is
       // now over-replicated and therefore a replica should be removed but
@@ -385,17 +385,8 @@ public class TestBlocksWithNotEnoughRacks {
     short REPLICATION_FACTOR = 2;
     final Path filePath = new Path("/testFile");
 
-    // Configure an excludes file
-    FileSystem localFileSys = FileSystem.getLocal(conf);
-    Path workingDir = new Path(MiniDFSCluster.getBaseDirectory());
-    Path dir = new Path(workingDir, "temp/decommission");
-    Path excludeFile = new Path(dir, "exclude");
-    Path includeFile = new Path(dir, "include");
-    assertTrue(localFileSys.mkdirs(dir));
-    DFSTestUtil.writeFile(localFileSys, excludeFile, "");
-    DFSTestUtil.writeFile(localFileSys, includeFile, "");
-    conf.set(DFSConfigKeys.DFS_HOSTS_EXCLUDE, excludeFile.toUri().getPath());
-    conf.set(DFSConfigKeys.DFS_HOSTS, includeFile.toUri().getPath());
+    HostsFileWriter hostsFileWriter = new HostsFileWriter();
+    hostsFileWriter.initialize(conf, "temp/decommission");
 
     // Two blocks and four racks
     String racks[] = {"/rack1", "/rack1", "/rack2", "/rack2"};
@@ -416,7 +407,7 @@ public class TestBlocksWithNotEnoughRacks {
       BlockLocation locs[] = fs.getFileBlockLocations(
           fs.getFileStatus(filePath), 0, Long.MAX_VALUE);
       String name = locs[0].getNames()[0];
-      DFSTestUtil.writeFile(localFileSys, excludeFile, name);
+      hostsFileWriter.initExcludeHost(name);
       ns.getBlockManager().getDatanodeManager().refreshNodes(conf);
       DFSTestUtil.waitForDecommission(fs, name);
 
@@ -424,6 +415,7 @@ public class TestBlocksWithNotEnoughRacks {
       DFSTestUtil.waitForReplication(cluster, b, 2, REPLICATION_FACTOR, 0);
     } finally {
       cluster.shutdown();
+      hostsFileWriter.cleanup();
     }
   }
 
@@ -438,17 +430,8 @@ public class TestBlocksWithNotEnoughRacks {
     short REPLICATION_FACTOR = 5;
     final Path filePath = new Path("/testFile");
 
-    // Configure an excludes file
-    FileSystem localFileSys = FileSystem.getLocal(conf);
-    Path workingDir = new Path(MiniDFSCluster.getBaseDirectory());
-    Path dir = new Path(workingDir, "temp/decommission");
-    Path excludeFile = new Path(dir, "exclude");
-    Path includeFile = new Path(dir, "include");
-    assertTrue(localFileSys.mkdirs(dir));
-    DFSTestUtil.writeFile(localFileSys, excludeFile, "");
-    DFSTestUtil.writeFile(localFileSys, includeFile, "");
-    conf.set(DFSConfigKeys.DFS_HOSTS, includeFile.toUri().getPath());
-    conf.set(DFSConfigKeys.DFS_HOSTS_EXCLUDE, excludeFile.toUri().getPath());
+    HostsFileWriter hostsFileWriter = new HostsFileWriter();
+    hostsFileWriter.initialize(conf, "temp/decommission");
 
     // All hosts are on two racks, only one host on /rack2
     String racks[] = {"/rack1", "/rack2", "/rack1", "/rack1", "/rack1"};
@@ -474,7 +457,7 @@ public class TestBlocksWithNotEnoughRacks {
       for (String top : locs[0].getTopologyPaths()) {
         if (!top.startsWith("/rack2")) {
           String name = top.substring("/rack1".length()+1);
-          DFSTestUtil.writeFile(localFileSys, excludeFile, name);
+          hostsFileWriter.initExcludeHost(name);
           ns.getBlockManager().getDatanodeManager().refreshNodes(conf);
           DFSTestUtil.waitForDecommission(fs, name);
           break;
@@ -486,6 +469,7 @@ public class TestBlocksWithNotEnoughRacks {
       DFSTestUtil.waitForReplication(cluster, b, 2, REPLICATION_FACTOR, 0);
     } finally {
       cluster.shutdown();
+      hostsFileWriter.cleanup();
     }
   }
 }

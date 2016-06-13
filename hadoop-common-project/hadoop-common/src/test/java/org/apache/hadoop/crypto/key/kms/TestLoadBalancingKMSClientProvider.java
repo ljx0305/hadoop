@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.crypto.key.kms;
 
+import static org.apache.hadoop.crypto.key.KeyProviderCryptoExtension.EncryptedKeyVersion;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -25,11 +26,14 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.net.URI;
+import java.security.GeneralSecurityException;
 import java.security.NoSuchAlgorithmException;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.crypto.key.KeyProvider;
 import org.apache.hadoop.crypto.key.KeyProvider.Options;
+import org.apache.hadoop.crypto.key.KeyProviderCryptoExtension;
+import org.apache.hadoop.security.authentication.client.AuthenticationException;
 import org.junit.Test;
 import org.mockito.Mockito;
 
@@ -60,14 +64,14 @@ public class TestLoadBalancingKMSClientProvider {
             providers[2].getKMSUrl()));
 
     kp = new KMSClientProvider.Factory().createProvider(new URI(
-        "kms://http@host1;host2;host3:16000/kms/foo"), conf);
+        "kms://http@host1;host2;host3:9600/kms/foo"), conf);
     assertTrue(kp instanceof LoadBalancingKMSClientProvider);
     providers =
         ((LoadBalancingKMSClientProvider) kp).getProviders();
     assertEquals(3, providers.length);
-    assertEquals(Sets.newHashSet("http://host1:16000/kms/foo/v1/",
-        "http://host2:16000/kms/foo/v1/",
-        "http://host3:16000/kms/foo/v1/"),
+    assertEquals(Sets.newHashSet("http://host1:9600/kms/foo/v1/",
+        "http://host2:9600/kms/foo/v1/",
+        "http://host3:9600/kms/foo/v1/"),
         Sets.newHashSet(providers[0].getKMSUrl(),
             providers[1].getKMSUrl(),
             providers[2].getKMSUrl()));
@@ -161,6 +165,96 @@ public class TestLoadBalancingKMSClientProvider {
       fail("Should fail since all providers threw an IOException");
     } catch (Exception e) {
       assertTrue(e instanceof IOException);
+    }
+  }
+
+  // copied from HttpExceptionUtils:
+
+  // trick, riding on generics to throw an undeclared exception
+
+  private static void throwEx(Throwable ex) {
+    TestLoadBalancingKMSClientProvider.<RuntimeException>throwException(ex);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <E extends Throwable> void throwException(Throwable ex)
+      throws E {
+    throw (E) ex;
+  }
+
+  private class MyKMSClientProvider extends KMSClientProvider {
+    public MyKMSClientProvider(URI uri, Configuration conf) throws IOException {
+      super(uri, conf);
+    }
+
+    @Override
+    public EncryptedKeyVersion generateEncryptedKey(
+        final String encryptionKeyName)
+        throws IOException, GeneralSecurityException {
+      throwEx(new AuthenticationException("bar"));
+      return null;
+    }
+
+    @Override
+    public KeyVersion decryptEncryptedKey(
+        final EncryptedKeyVersion encryptedKeyVersion) throws IOException,
+        GeneralSecurityException {
+      throwEx(new AuthenticationException("bar"));
+      return null;
+    }
+
+    @Override
+    public KeyVersion createKey(final String name, final Options options)
+        throws NoSuchAlgorithmException, IOException {
+      throwEx(new AuthenticationException("bar"));
+      return null;
+    }
+
+    @Override
+    public KeyVersion rollNewVersion(final String name)
+        throws NoSuchAlgorithmException, IOException {
+      throwEx(new AuthenticationException("bar"));
+      return null;
+    }
+  }
+
+  @Test
+  public void testClassCastException() throws Exception {
+    Configuration conf = new Configuration();
+    KMSClientProvider p1 = new MyKMSClientProvider(
+        new URI("kms://http@host1/kms/foo"), conf);
+    LoadBalancingKMSClientProvider kp = new LoadBalancingKMSClientProvider(
+        new KMSClientProvider[] {p1}, 0, conf);
+    try {
+      kp.generateEncryptedKey("foo");
+    } catch (IOException ioe) {
+      assertTrue(ioe.getCause().getClass().getName().contains(
+          "AuthenticationException"));
+    }
+
+    try {
+      final KeyProviderCryptoExtension.EncryptedKeyVersion
+          encryptedKeyVersion =
+          mock(KeyProviderCryptoExtension.EncryptedKeyVersion.class);
+      kp.decryptEncryptedKey(encryptedKeyVersion);
+    } catch (IOException ioe) {
+      assertTrue(ioe.getCause().getClass().getName().contains(
+          "AuthenticationException"));
+    }
+
+    try {
+      final KeyProvider.Options options = KeyProvider.options(conf);
+      kp.createKey("foo", options);
+    } catch (IOException ioe) {
+      assertTrue(ioe.getCause().getClass().getName().contains(
+          "AuthenticationException"));
+    }
+
+    try {
+      kp.rollNewVersion("foo");
+    } catch (IOException ioe) {
+      assertTrue(ioe.getCause().getClass().getName().contains(
+          "AuthenticationException"));
     }
   }
 }

@@ -20,12 +20,12 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <parent>
     <groupId>org.apache.hadoop</groupId>
     <artifactId>hadoop-project-dist</artifactId>
-    <version>3.0.0-SNAPSHOT</version>
+    <version>3.0.0-alpha1-SNAPSHOT</version>
     <relativePath>../../hadoop-project-dist</relativePath>
   </parent>
   <groupId>org.apache.hadoop</groupId>
   <artifactId>hadoop-hdfs</artifactId>
-  <version>3.0.0-SNAPSHOT</version>
+  <version>3.0.0-alpha1-SNAPSHOT</version>
   <description>Apache Hadoop HDFS</description>
   <name>Apache Hadoop HDFS</name>
   <packaging>jar</packaging>
@@ -278,6 +278,10 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
                     <exclude name="**/proto-web.xml"/>
                   </fileset>
                 </copy>
+                <replace dir="${project.build.directory}/webapps" value="${release-year}">
+                  <include name="**/*.html"/>
+                  <replacetoken>{release-year-token}</replacetoken>
+                </replace>
               </target>
             </configuration>
           </execution>
@@ -339,6 +343,7 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
                 <includes>
                   <include>HdfsServer.proto</include>
                   <include>DatanodeProtocol.proto</include>
+                  <include>DatanodeLifelineProtocol.proto</include>
                   <include>HAZKInfo.proto</include>
                   <include>InterDatanodeProtocol.proto</include>
                   <include>JournalProtocol.proto</include>
@@ -365,9 +370,6 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
         <artifactId>apache-rat-plugin</artifactId>
         <configuration>
           <excludes>
-            <exclude>CHANGES.txt</exclude>
-            <exclude>CHANGES.HDFS-1623.txt</exclude>
-            <exclude>CHANGES.HDFS-347.txt</exclude>
             <exclude>.gitattributes</exclude>
             <exclude>.idea/**</exclude>
             <exclude>src/main/conf/*</exclude>
@@ -379,6 +381,7 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
             <exclude>src/test/all-tests</exclude>
             <exclude>src/test/resources/*.tgz</exclude>
             <exclude>src/test/resources/data*</exclude>
+            <exclude>**/*.json</exclude>
             <exclude>src/test/resources/editsStored*</exclude>
             <exclude>src/test/resources/empty-file</exclude>
             <exclude>src/main/webapps/datanode/robots.txt</exclude>
@@ -414,7 +417,7 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
     </plugins>
   </build>
 
-  <profiles>    
+  <profiles>
     <!-- profile that starts ApacheDS KDC server -->
     <profile>
       <id>startKdc</id>
@@ -556,5 +559,41 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
         </plugins>
       </build>
     </profile>
+
+    <!-- profile to test shell code -->
+    <profile>
+      <id>shelltest</id>
+      <activation>
+        <property>
+          <name>!skipTests</name>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <executions>
+                <execution>
+                    <id>hdfs-test-bats-driver</id>
+                    <phase>test</phase>
+                    <goals>
+                        <goal>run</goal>
+                    </goals>
+                    <configuration>
+                      <target>
+                          <exec dir="src/test/scripts"
+                           executable="bash"
+                           failonerror="true">
+                           <arg value="./run-bats.sh" />
+                         </exec>
+                      </target>
+                    </configuration>
+                </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
   </profiles>
 </project>

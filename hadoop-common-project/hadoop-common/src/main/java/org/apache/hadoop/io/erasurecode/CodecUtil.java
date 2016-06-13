@@ -17,10 +17,13 @@
  */
 package org.apache.hadoop.io.erasurecode;
 
+import com.google.common.base.Preconditions;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeys;
-import org.apache.hadoop.io.erasurecode.rawcoder.*;
+import org.apache.hadoop.io.erasurecode.rawcoder.RawErasureCoderFactory;
+import org.apache.hadoop.io.erasurecode.rawcoder.RawErasureDecoder;
+import org.apache.hadoop.io.erasurecode.rawcoder.RawErasureEncoder;
 
 /**
  * A codec & coder utility to help create raw coders conveniently.
@@ -32,115 +35,88 @@ public final class CodecUtil {
 
   /**
    * Create RS raw encoder according to configuration.
-   * @param conf configuration possibly with some items to configure the coder
-   * @param numDataUnits number of data units in a coding group
-   * @param numParityUnits number of parity units in a coding group
+   * @param conf configuration
+   * @param coderOptions coder options that's used to create the coder
+   * @param codec the codec to use. If null, will use the default codec
    * @return raw encoder
    */
-  public static RawErasureEncoder createRSRawEncoder(
-      Configuration conf, int numDataUnits, int numParityUnits) {
-    RawErasureCoder rawCoder = createRawCoder(conf,
-        CommonConfigurationKeys.IO_ERASURECODE_CODEC_RS_RAWCODER_KEY,
-        true, numDataUnits, numParityUnits);
-    if (rawCoder == null) {
-      rawCoder = new RSRawEncoder(numDataUnits, numParityUnits);
-    }
+  public static RawErasureEncoder createRawEncoder(
+      Configuration conf, String codec, ErasureCoderOptions coderOptions) {
+    Preconditions.checkNotNull(conf);
+    Preconditions.checkNotNull(codec);
 
-    return (RawErasureEncoder) rawCoder;
+    String rawCoderFactoryKey = getFactNameFromCodec(conf, codec);
+
+    RawErasureCoderFactory fact = createRawCoderFactory(conf,
+        rawCoderFactoryKey);
+
+    return fact.createEncoder(coderOptions);
   }
 
   /**
    * Create RS raw decoder according to configuration.
-   * @param conf configuration possibly with some items to configure the coder
-   * @param numDataUnits number of data units in a coding group
-   * @param numParityUnits number of parity units in a coding group
+   * @param conf configuration
+   * @param coderOptions coder options that's used to create the coder
+   * @param codec the codec to use. If null, will use the default codec
    * @return raw decoder
    */
-  public static RawErasureDecoder createRSRawDecoder(
-      Configuration conf, int numDataUnits, int numParityUnits) {
-    RawErasureCoder rawCoder = createRawCoder(conf,
-        CommonConfigurationKeys.IO_ERASURECODE_CODEC_RS_RAWCODER_KEY,
-        false, numDataUnits, numParityUnits);
-    if (rawCoder == null) {
-      rawCoder = new RSRawDecoder(numDataUnits, numParityUnits);
-    }
+  public static RawErasureDecoder createRawDecoder(
+      Configuration conf, String codec, ErasureCoderOptions coderOptions) {
+    Preconditions.checkNotNull(conf);
+    Preconditions.checkNotNull(codec);
 
-    return (RawErasureDecoder) rawCoder;
+    String rawCoderFactoryKey = getFactNameFromCodec(conf, codec);
+
+    RawErasureCoderFactory fact = createRawCoderFactory(conf,
+        rawCoderFactoryKey);
+
+    return fact.createDecoder(coderOptions);
   }
 
-  /**
-   * Create XOR raw encoder according to configuration.
-   * @param conf configuration possibly with some items to configure the coder
-   * @param numDataUnits number of data units in a coding group
-   * @param numParityUnits number of parity units in a coding group
-   * @return raw encoder
-   */
-  public static RawErasureEncoder createXORRawEncoder(
-      Configuration conf, int numDataUnits, int numParityUnits) {
-    RawErasureCoder rawCoder = createRawCoder(conf,
-        CommonConfigurationKeys.IO_ERASURECODE_CODEC_XOR_RAWCODER_KEY,
-        true, numDataUnits, numParityUnits);
-    if (rawCoder == null) {
-      rawCoder = new XORRawEncoder(numDataUnits, numParityUnits);
-    }
-
-    return (RawErasureEncoder) rawCoder;
-  }
-
-  /**
-   * Create XOR raw decoder according to configuration.
-   * @param conf configuration possibly with some items to configure the coder
-   * @param numDataUnits number of data units in a coding group
-   * @param numParityUnits number of parity units in a coding group
-   * @return raw decoder
-   */
-  public static RawErasureDecoder createXORRawDecoder(
-      Configuration conf, int numDataUnits, int numParityUnits) {
-    RawErasureCoder rawCoder = createRawCoder(conf,
-        CommonConfigurationKeys.IO_ERASURECODE_CODEC_XOR_RAWCODER_KEY,
-        false, numDataUnits, numParityUnits);
-    if (rawCoder == null) {
-      rawCoder = new XORRawDecoder(numDataUnits, numParityUnits);
-    }
-
-    return (RawErasureDecoder) rawCoder;
-  }
-
-  /**
-   * Create raw coder using specified conf and raw coder factory key.
-   * @param conf configuration possibly with some items to configure the coder
-   * @param rawCoderFactoryKey configuration key to find the raw coder factory
-   * @param isEncoder is encoder or not we're going to create
-   * @param numDataUnits number of data units in a coding group
-   * @param numParityUnits number of parity units in a coding group
-   * @return raw coder
-   */
-  public static RawErasureCoder createRawCoder(Configuration conf,
-      String rawCoderFactoryKey, boolean isEncoder, int numDataUnits,
-                                               int numParityUnits) {
-
-    if (conf == null) {
-      return null;
-    }
-
-    Class<? extends RawErasureCoderFactory> factClass = null;
-    factClass = conf.getClass(rawCoderFactoryKey,
-        factClass, RawErasureCoderFactory.class);
-
-    if (factClass == null) {
-      return null;
-    }
-
+  private static RawErasureCoderFactory createRawCoderFactory(
+      Configuration conf, String rawCoderFactoryKey) {
     RawErasureCoderFactory fact;
     try {
+      Class<? extends RawErasureCoderFactory> factClass = conf.getClassByName(
+          rawCoderFactoryKey).asSubclass(RawErasureCoderFactory.class);
       fact = factClass.newInstance();
-    } catch (InstantiationException e) {
-      throw new RuntimeException("Failed to create raw coder", e);
-    } catch (IllegalAccessException e) {
-      throw new RuntimeException("Failed to create raw coder", e);
+    } catch (ClassNotFoundException | InstantiationException |
+        IllegalAccessException e) {
+      throw new RuntimeException("Failed to create raw coder factory", e);
     }
 
-    return isEncoder ? fact.createEncoder(numDataUnits, numParityUnits) :
-            fact.createDecoder(numDataUnits, numParityUnits);
+    if (fact == null) {
+      throw new RuntimeException("Failed to create raw coder factory");
+    }
+
+    return fact;
+  }
+
+  private static String getFactNameFromCodec(Configuration conf, String codec) {
+    switch (codec) {
+    case ErasureCodeConstants.RS_DEFAULT_CODEC_NAME:
+      return conf.get(
+          CommonConfigurationKeys.IO_ERASURECODE_CODEC_RS_DEFAULT_RAWCODER_KEY,
+          CommonConfigurationKeys.
+              IO_ERASURECODE_CODEC_RS_DEFAULT_RAWCODER_DEFAULT);
+    case ErasureCodeConstants.RS_LEGACY_CODEC_NAME:
+      return conf.get(
+          CommonConfigurationKeys.IO_ERASURECODE_CODEC_RS_LEGACY_RAWCODER_KEY,
+          CommonConfigurationKeys.
+              IO_ERASURECODE_CODEC_RS_LEGACY_RAWCODER_DEFAULT);
+    case ErasureCodeConstants.XOR_CODEC_NAME:
+      return conf.get(
+          CommonConfigurationKeys.IO_ERASURECODE_CODEC_XOR_RAWCODER_KEY,
+          CommonConfigurationKeys.IO_ERASURECODE_CODEC_XOR_RAWCODER_DEFAULT);
+    default:
+      // For custom codec, we throw exception if the factory is not configured
+      String rawCoderKey = "io.erasurecode.codec." + codec + ".rawcoder";
+      String factName = conf.get(rawCoderKey);
+      if (factName == null) {
+        throw new IllegalArgumentException("Raw coder factory not configured " +
+            "for custom codec " + codec);
+      }
+      return factName;
+    }
   }
 }

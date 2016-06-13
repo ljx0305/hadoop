@@ -71,6 +71,7 @@ public class FairSchedulerPage extends RmView {
     protected void render(Block html) {
       ResponseInfo ri = info("\'" + qinfo.getQueueName() + "\' Queue Status").
           _("Used Resources:", qinfo.getUsedResources().toString()).
+          _("Demand Resources:", qinfo.getDemandResources().toString()).
           _("Num Active Applications:", qinfo.getNumActiveApplications()).
           _("Num Pending Applications:", qinfo.getNumPendingApplications()).
           _("Min Resources:", qinfo.getMinResources().toString()).
@@ -81,6 +82,7 @@ public class FairSchedulerPage extends RmView {
       }
       ri._(STEADY_FAIR_SHARE + ":", qinfo.getSteadyFairShare().toString());
       ri._(INSTANTANEOUS_FAIR_SHARE + ":", qinfo.getFairShare().toString());
+      ri._("Preemptable:", qinfo.isPreemptable());
       html._(InfoBlock.class);
 
       // clear the info contents so this queue's info doesn't accumulate into another queue's info

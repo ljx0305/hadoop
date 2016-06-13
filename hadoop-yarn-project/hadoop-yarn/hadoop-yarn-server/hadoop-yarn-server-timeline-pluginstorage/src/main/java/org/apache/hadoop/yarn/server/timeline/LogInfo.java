@@ -19,6 +19,7 @@ package org.apache.hadoop.yarn.server.timeline;
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IOUtils;
@@ -97,13 +98,15 @@ abstract class LogInfo {
     ));
   }
 
-  public void parseForStore(TimelineDataManager tdm, Path appDirPath,
+  public long parseForStore(TimelineDataManager tdm, Path appDirPath,
       boolean appCompleted, JsonFactory jsonFactory, ObjectMapper objMapper,
       FileSystem fs) throws IOException {
     LOG.debug("Parsing for log dir {} on attempt {}", appDirPath,
         attemptDirName);
     Path logPath = getPath(appDirPath);
-    if (fs.exists(logPath)) {
+    FileStatus status = fs.getFileStatus(logPath);
+    long numParsed = 0;
+    if (status != null) {
       long startTime = Time.monotonicNow();
       try {
         LOG.debug("Parsing {} at offset {}", logPath, offset);
@@ -111,15 +114,20 @@ abstract class LogInfo {
             objMapper, fs);
         LOG.info("Parsed {} entities from {} in {} msec",
             count, logPath, Time.monotonicNow() - startTime);
+        numParsed += count;
       } catch (RuntimeException e) {
-        if (e.getCause() instanceof JsonParseException) {
-          // If AppLogs cannot parse this log, it may be corrupted
+        // If AppLogs cannot parse this log, it may be corrupted or just empty
+        if (e.getCause() instanceof JsonParseException &&
+            (status.getLen() > 0 || offset > 0)) {
+          // log on parse problems if the file as been read in the past or
+          // is visibly non-empty
           LOG.info("Log {} appears to be corrupted. Skip. ", logPath);
         }
       }
     } else {
       LOG.warn("{} no longer exists. Skip for scanning. ", logPath);
     }
+    return numParsed;
   }
 
   private long parsePath(TimelineDataManager tdm, Path logPath,

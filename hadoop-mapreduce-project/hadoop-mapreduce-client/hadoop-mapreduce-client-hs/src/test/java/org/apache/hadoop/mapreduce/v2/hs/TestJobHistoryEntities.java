@@ -19,14 +19,18 @@ package org.apache.hadoop.mapreduce.v2.hs;
 
 import static org.junit.Assert.assertEquals;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapred.JobACLsManager;
+import org.apache.hadoop.mapreduce.jobhistory.JobHistoryParser;
+import org.apache.hadoop.mapreduce.jobhistory.JobHistoryParser.JobInfo;
 import org.apache.hadoop.mapreduce.v2.api.records.JobId;
 import org.apache.hadoop.mapreduce.v2.api.records.JobReport;
 import org.apache.hadoop.mapreduce.v2.api.records.JobState;
@@ -90,6 +94,7 @@ public class TestJobHistoryEntities {
   public void testCompletedJob() throws Exception {
     HistoryFileInfo info = mock(HistoryFileInfo.class);
     when(info.getConfFile()).thenReturn(fullConfPath);
+    when(info.getHistoryFile()).thenReturn(fullHistoryPath);
     //Re-initialize to verify the delayed load.
     completedJob =
       new CompletedJob(conf, jobId, fullHistoryPath, loadTasks, "user",
@@ -109,12 +114,14 @@ public class TestJobHistoryEntities {
     JobReport jobReport = completedJob.getReport();
     assertEquals("user", jobReport.getUser());
     assertEquals(JobState.SUCCEEDED, jobReport.getJobState());
+    assertEquals(fullHistoryPath.toString(), jobReport.getHistoryFile());
   }
   
   @Test (timeout=100000)
   public void testCopmletedJobReportWithZeroTasks() throws Exception {
     HistoryFileInfo info = mock(HistoryFileInfo.class);
     when(info.getConfFile()).thenReturn(fullConfPath);
+    when(info.getHistoryFile()).thenReturn(fullHistoryPathZeroReduces);
     completedJob =
       new CompletedJob(conf, jobId, fullHistoryPathZeroReduces, loadTasks, "user",
           info, jobAclsManager);
@@ -124,6 +131,8 @@ public class TestJobHistoryEntities {
     assertEquals(0, completedJob.getCompletedReduces());
     // Verify that the reduce progress is 1.0 (not NaN)
     assertEquals(1.0, jobReport.getReduceProgress(), 0.001);
+    assertEquals(fullHistoryPathZeroReduces.toString(),
+        jobReport.getHistoryFile());
   }
 
   @Test (timeout=10000)
@@ -231,4 +240,27 @@ public class TestJobHistoryEntities {
 
   }
 
+  @Test (timeout=30000)
+  public void testCompletedJobWithDiagnostics() throws Exception {
+    final String jobError = "Job Diagnostics";
+    JobInfo jobInfo = spy(new JobInfo());
+    when(jobInfo.getErrorInfo()).thenReturn(jobError);
+    when(jobInfo.getJobStatus()).thenReturn(JobState.FAILED.toString());
+    when(jobInfo.getAMInfos()).thenReturn(Collections.<JobHistoryParser.AMInfo>emptyList());
+    final JobHistoryParser mockParser = mock(JobHistoryParser.class);
+    when(mockParser.parse()).thenReturn(jobInfo);
+    HistoryFileInfo info = mock(HistoryFileInfo.class);
+    when(info.getConfFile()).thenReturn(fullConfPath);
+    when(info.getHistoryFile()).thenReturn(fullHistoryPath);
+    CompletedJob job =
+      new CompletedJob(conf, jobId, fullHistoryPath, loadTasks, "user",
+          info, jobAclsManager) {
+            @Override
+            protected JobHistoryParser createJobHistoryParser(
+                Path historyFileAbsolute) throws IOException {
+               return mockParser;
+            }
+    };
+    assertEquals(jobError, job.getReport().getDiagnostics());
+  }
 }
