@@ -181,7 +181,7 @@ public class NMWebServices {
     ContainerId containerId = null;
     init();
     try {
-      containerId = ConverterUtils.toContainerId(id);
+      containerId = ContainerId.fromString(id);
     } catch (Exception e) {
       throw new BadRequestException("invalid container id, " + id);
     }
@@ -224,7 +224,7 @@ public class NMWebServices {
       @QueryParam("size") String size) {
     ContainerId containerId;
     try {
-      containerId = ConverterUtils.toContainerId(containerIdStr);
+      containerId = ContainerId.fromString(containerIdStr);
     } catch (IllegalArgumentException ex) {
       return Response.status(Status.BAD_REQUEST).build();
     }
@@ -264,20 +264,18 @@ public class NMWebServices {
             byte[] buf = new byte[bufferSize];
             long toSkip = 0;
             long totalBytesToRead = fileLength;
+            long skipAfterRead = 0;
             if (bytes < 0) {
               long absBytes = Math.abs(bytes);
               if (absBytes < fileLength) {
                 toSkip = fileLength - absBytes;
                 totalBytesToRead = absBytes;
               }
-              long skippedBytes = fis.skip(toSkip);
-              if (skippedBytes != toSkip) {
-                throw new IOException("The bytes were skipped are different "
-                    + "from the caller requested");
-              }
+              org.apache.hadoop.io.IOUtils.skipFully(fis, toSkip);
             } else {
               if (bytes < fileLength) {
                 totalBytesToRead = bytes;
+                skipAfterRead = fileLength - bytes;
               }
             }
 
@@ -295,6 +293,7 @@ public class NMWebServices {
                   : (int) pendingRead;
               len = fis.read(buf, 0, toRead);
             }
+            org.apache.hadoop.io.IOUtils.skipFully(fis, skipAfterRead);
             os.flush();
           } finally {
             IOUtils.closeQuietly(fis);
